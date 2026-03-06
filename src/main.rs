@@ -15,6 +15,8 @@ async fn main() {
     // Load .env file if present (errors are silently ignored)
     let _ = dotenvy::dotenv();
 
+    warn_if_env_file_is_world_readable();
+
     let cli = Cli::parse();
 
     let config = match build_config(&cli) {
@@ -41,14 +43,27 @@ async fn main() {
     }
 }
 
+fn warn_if_env_file_is_world_readable() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(".env") {
+            let mode = metadata.permissions().mode();
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "Warning: .env file has permissions {:o}. Consider running: chmod 600 .env",
+                    mode & 0o777
+                );
+            }
+        }
+    }
+}
+
 fn build_config(cli: &Cli) -> error::Result<Config> {
     let mut config = Config::from_env()?;
 
     if let Some(ref id) = cli.client_id {
         config.client_id = id.clone();
-    }
-    if let Some(ref secret) = cli.client_secret {
-        config.client_secret = secret.clone();
     }
     if let Some(ref url) = cli.base_url {
         config.base_url = url.clone();

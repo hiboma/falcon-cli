@@ -20,10 +20,6 @@ pub struct Cli {
     #[arg(long, env = "FALCON_CLIENT_ID", hide_env = true)]
     pub client_id: Option<String>,
 
-    /// CrowdStrike API client secret (overrides FALCON_CLIENT_SECRET)
-    #[arg(long, env = "FALCON_CLIENT_SECRET", hide_env = true)]
-    pub client_secret: Option<String>,
-
     /// Base URL for the Falcon API (overrides FALCON_BASE_URL)
     #[arg(long, env = "FALCON_BASE_URL", hide_env = true)]
     pub base_url: Option<String>,
