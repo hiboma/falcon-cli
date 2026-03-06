@@ -4,6 +4,7 @@ mod client;
 mod commands;
 mod config;
 mod error;
+mod output;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -28,7 +29,7 @@ async fn main() {
 
     match result {
         Ok(value) => {
-            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            output::print_value(&value, &cli.output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);

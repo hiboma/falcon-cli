@@ -1,6 +1,12 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::commands;
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum OutputFormat {
+    Json,
+    Table,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -25,6 +31,10 @@ pub struct Cli {
     /// Member CID for MSSP (overrides FALCON_MEMBER_CID)
     #[arg(long, env = "FALCON_MEMBER_CID", hide_env = true)]
     pub member_cid: Option<String>,
+
+    /// Output format (json or table)
+    #[arg(long, short, default_value = "json")]
+    pub output: OutputFormat,
 
     #[command(subcommand)]
     pub command: Command,
