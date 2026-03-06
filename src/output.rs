@@ -2,9 +2,10 @@ use crate::cli::OutputFormat;
 
 pub fn print_value(value: &serde_json::Value, format: &OutputFormat) {
     match format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(value).unwrap());
-        }
+        OutputFormat::Json => match serde_json::to_string_pretty(value) {
+            Ok(s) => println!("{}", s),
+            Err(e) => eprintln!("Error formatting JSON: {}", e),
+        },
         OutputFormat::Table => {
             print_table(value);
         }
@@ -40,12 +41,16 @@ fn print_table(value: &serde_json::Value) {
                     print_row(&keys, &widths, item);
                 }
             }
-            _ => {
-                println!("{}", serde_json::to_string_pretty(value).unwrap());
-            }
+            _ => match serde_json::to_string_pretty(value) {
+                Ok(s) => println!("{}", s),
+                Err(e) => eprintln!("Error formatting JSON: {}", e),
+            },
         }
     } else {
-        println!("{}", serde_json::to_string_pretty(value).unwrap());
+        match serde_json::to_string_pretty(value) {
+            Ok(s) => println!("{}", s),
+            Err(e) => eprintln!("Error formatting JSON: {}", e),
+        }
     }
 }
 

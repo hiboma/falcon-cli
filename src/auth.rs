@@ -61,7 +61,8 @@ impl Auth {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let mut body = resp.text().await.unwrap_or_default();
+            body.truncate(200);
             return Err(FalconError::Auth(format!("{}: {}", status, body)));
         }
 

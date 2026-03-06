@@ -119,7 +119,9 @@ impl FalconClient {
         let body = resp.text().await?;
 
         if !status.is_success() {
-            return Err(FalconError::Api(format!("{}: {}", status, body)));
+            let mut truncated = body.clone();
+            truncated.truncate(200);
+            return Err(FalconError::Api(format!("{}: {}", status, truncated)));
         }
 
         let value: serde_json::Value = serde_json::from_str(&body)?;
