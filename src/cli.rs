@@ -38,7 +38,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Manage alerts
+    /// Manage alerts (list, get, investigate)
     Alert {
         #[command(subcommand)]
         action: commands::alerts::Action,
