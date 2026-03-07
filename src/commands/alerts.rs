@@ -58,7 +58,7 @@ pub enum Action {
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
     },
-    /// Investigate a lead and its related detections in one step
+    /// Get an automated-lead and its related detections in one step
     ///
     /// Retrieves the lead details, finds all related detections via
     /// aggregate_id, and returns everything in a single JSON response.
@@ -71,8 +71,8 @@ pub enum Action {
     ///
     /// Output format:
     ///   { "lead": { ... }, "detections": [ ... ] }
-    Investigate {
-        /// Alert composite ID to investigate
+    AutomatedLead {
+        /// Automated-lead composite ID
         #[arg(long, required = true)]
         id: String,
     },
@@ -97,7 +97,7 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             let body = serde_json::json!({ "composite_ids": id });
             client.post("/alerts/entities/alerts/v2", &body).await
         }
-        Action::Investigate { id } => {
+        Action::AutomatedLead { id } => {
             // Step 1: Get lead details
             let body = serde_json::json!({ "composite_ids": [&id] });
             let lead_response = client.post("/alerts/entities/alerts/v2", &body).await?;
