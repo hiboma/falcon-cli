@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 use crate::commands;
 
@@ -758,5 +759,11 @@ pub enum Command {
     Faas {
         #[command(subcommand)]
         action: commands::faas_execution::Action,
+    },
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Target shell
+        shell: Shell,
     },
 }
