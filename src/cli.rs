@@ -98,6 +98,10 @@ pub struct Cli {
     #[arg(long, short, default_value = "json")]
     pub output: OutputFormat,
 
+    /// Pretty-print JSON output
+    #[arg(long)]
+    pub pretty: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

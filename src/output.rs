@@ -1,18 +1,25 @@
 use crate::cli::OutputFormat;
 
-pub fn print_value(value: &serde_json::Value, format: &OutputFormat) {
+pub fn print_value(value: &serde_json::Value, format: &OutputFormat, pretty: bool) {
     match format {
-        OutputFormat::Json => match serde_json::to_string_pretty(value) {
-            Ok(s) => println!("{}", s),
-            Err(e) => eprintln!("Error formatting JSON: {}", e),
-        },
+        OutputFormat::Json => {
+            let result = if pretty {
+                serde_json::to_string_pretty(value)
+            } else {
+                serde_json::to_string(value)
+            };
+            match result {
+                Ok(s) => println!("{}", s),
+                Err(e) => eprintln!("Error formatting JSON: {}", e),
+            }
+        }
         OutputFormat::Table => {
-            print_table(value);
+            print_table(value, pretty);
         }
     }
 }
 
-fn print_table(value: &serde_json::Value) {
+fn print_table(value: &serde_json::Value, pretty: bool) {
     if let Some(resources) = value.get("resources").and_then(|r| r.as_array()) {
         if resources.is_empty() {
             println!("(no results)");
@@ -41,13 +48,25 @@ fn print_table(value: &serde_json::Value) {
                     print_row(&keys, &widths, item);
                 }
             }
-            _ => match serde_json::to_string_pretty(value) {
-                Ok(s) => println!("{}", s),
-                Err(e) => eprintln!("Error formatting JSON: {}", e),
-            },
+            _ => {
+                let result = if pretty {
+                    serde_json::to_string_pretty(value)
+                } else {
+                    serde_json::to_string(value)
+                };
+                match result {
+                    Ok(s) => println!("{}", s),
+                    Err(e) => eprintln!("Error formatting JSON: {}", e),
+                }
+            }
         }
     } else {
-        match serde_json::to_string_pretty(value) {
+        let result = if pretty {
+            serde_json::to_string_pretty(value)
+        } else {
+            serde_json::to_string(value)
+        };
+        match result {
             Ok(s) => println!("{}", s),
             Err(e) => eprintln!("Error formatting JSON: {}", e),
         }

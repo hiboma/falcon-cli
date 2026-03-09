@@ -29,7 +29,7 @@ async fn main() {
 
     match result {
         Ok(value) => {
-            output::print_value(&value, &cli.output);
+            output::print_value(&value, &cli.output, cli.pretty);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
