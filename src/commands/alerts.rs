@@ -115,9 +115,7 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             id,
             status,
             comment,
-        } => {
-            update_alerts(client, &id, status.as_deref(), comment.as_deref()).await
-        }
+        } => update_alerts(client, &id, status.as_deref(), comment.as_deref()).await,
         Action::Close { id, comment } => {
             update_alerts(client, &id, Some("closed"), comment.as_deref()).await
         }
