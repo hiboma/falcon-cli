@@ -34,8 +34,8 @@ impl RequestHandler {
 
         AuditLog::log_request(&request.command, &request.action, &request.id);
 
-        // Verify session token.
-        if request.token != self.session_token {
+        // Verify session token using constant-time comparison to prevent timing attacks.
+        if !constant_time_eq(request.token.as_bytes(), self.session_token.as_bytes()) {
             AuditLog::log_denied(&request.id, "invalid_token");
             return DaemonResponse::error(request.id, "auth", "invalid session token".to_string());
         }
@@ -47,6 +47,16 @@ impl RequestHandler {
                 request.id,
                 "rate_limited",
                 "rate limit exceeded".to_string(),
+            );
+        }
+
+        // Validate command and action names.
+        if !is_valid_name(&request.command) || !is_valid_name(&request.action) {
+            AuditLog::log_denied(&request.id, "invalid_command_name");
+            return DaemonResponse::error(
+                request.id,
+                "validation",
+                "invalid command or action name".to_string(),
             );
         }
 
@@ -139,12 +149,40 @@ fn item_to_string(value: &serde_json::Value) -> String {
     }
 }
 
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Validate that a command/action name contains only safe characters.
+fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 fn classify_error(err: &crate::error::FalconError) -> (String, String) {
+    // Log full error details server-side, return generic messages to client.
+    eprintln!("daemon: command error: {}", err);
     match err {
-        crate::error::FalconError::Auth(msg) => ("auth".to_string(), msg.clone()),
+        crate::error::FalconError::Auth(_) => {
+            ("auth".to_string(), "authentication failed".to_string())
+        }
         crate::error::FalconError::Api(msg) => ("api".to_string(), msg.clone()),
-        crate::error::FalconError::Http(e) => ("http".to_string(), e.to_string()),
-        crate::error::FalconError::Json(e) => ("json".to_string(), e.to_string()),
+        crate::error::FalconError::Http(_) => {
+            ("http".to_string(), "HTTP request failed".to_string())
+        }
+        crate::error::FalconError::Json(_) => {
+            ("json".to_string(), "response parsing failed".to_string())
+        }
         crate::error::FalconError::Config(msg) => ("config".to_string(), msg.clone()),
     }
 }
