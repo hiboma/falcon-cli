@@ -64,6 +64,9 @@ Platform & Integration:
   api-integration, aspm, cao-hunting, correlation-rule,
   correlation-admin, custom-storage, delivery-setting, fdr,
   firewall, logscale, ngsiem, sample, saas-security, faas
+
+Daemon:
+  daemon
 ";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -101,6 +104,18 @@ pub struct Cli {
     /// Pretty-print JSON output
     #[arg(long)]
     pub pretty: bool,
+
+    /// Connect to daemon instead of calling API directly
+    #[arg(long)]
+    pub daemon: bool,
+
+    /// Path to the daemon Unix domain socket
+    #[arg(long, env = "FALCON_DAEMON_SOCKET", hide_env = true)]
+    pub socket: Option<String>,
+
+    /// Daemon session token (issued at daemon startup)
+    #[arg(long, env = "FALCON_DAEMON_TOKEN", hide_env = true, hide = true)]
+    pub token: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -771,5 +786,39 @@ pub enum Command {
     AutomatedLead {
         #[command(subcommand)]
         action: commands::automated_lead::Action,
+    },
+
+    // ── Daemon ──
+    /// Manage the falcon-cli daemon for credential isolation
+    #[command(next_help_heading = "Daemon")]
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+/// Daemon subcommand actions.
+#[derive(Subcommand, Debug)]
+pub enum DaemonAction {
+    /// Start the daemon server (run under `op run`)
+    Start {
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<String>,
+        /// Path to the daemon configuration file
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Stop the running daemon
+    Stop {
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<String>,
+    },
+    /// Show daemon status
+    Status {
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<String>,
     },
 }

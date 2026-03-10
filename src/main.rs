@@ -3,17 +3,34 @@ mod cli;
 mod client;
 mod commands;
 mod config;
+mod daemon;
+mod dispatch;
 mod error;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, DaemonAction};
 use config::Config;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
+    // Handle daemon subcommand.
+    if let Command::Daemon { action } = &cli.command {
+        handle_daemon_command(action, &cli).await;
+        return;
+    }
+
+    // If --daemon flag is set, route through the daemon client.
+    if cli.daemon {
+        handle_daemon_client(&cli).await;
+        return;
+    }
+
+    // Direct mode: call API directly.
     let config = match build_config(&cli) {
         Ok(c) => c,
         Err(e) => {
@@ -25,7 +42,7 @@ async fn main() {
     let auth = auth::Auth::new(config.clone());
     let falcon = client::FalconClient::new(auth, config.base_url.clone());
 
-    let result = execute(&falcon, cli.command).await;
+    let result = dispatch::execute(&falcon, cli.command).await;
 
     match result {
         Ok(value) => {
@@ -54,232 +71,201 @@ fn build_config(cli: &Cli) -> error::Result<Config> {
     Ok(config)
 }
 
-async fn execute(
-    client: &client::FalconClient,
-    command: Command,
-) -> error::Result<serde_json::Value> {
-    match command {
-        Command::Alert { action } => commands::alerts::execute(client, action).await,
-        Command::AutomatedLead { action } => {
-            commands::automated_lead::execute(client, action).await
+async fn handle_daemon_command(action: &DaemonAction, cli: &Cli) {
+    match action {
+        DaemonAction::Start { socket, config } => {
+            let config_obj = match build_config(cli) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let auth = auth::Auth::new(config_obj.clone());
+            let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
+            let falcon = Arc::new(falcon);
+
+            let socket_path = daemon::resolve_socket_path(socket.as_deref());
+            let config_path = config.as_ref().map(std::path::PathBuf::from);
+
+            if let Err(e) =
+                daemon::server::start(falcon, &socket_path, config_path.as_deref()).await
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
-        Command::ApiIntegration { action } => {
-            commands::api_integrations::execute(client, action).await
+        DaemonAction::Stop { socket } => {
+            let socket_path = daemon::resolve_socket_path(socket.as_deref());
+            if let Err(e) = daemon::client::stop(&socket_path) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
-        Command::Aspm { action } => commands::aspm::execute(client, action).await,
-        Command::CaoHunting { action } => commands::cao_hunting::execute(client, action).await,
-        Command::Case { action } => commands::case_management::execute(client, action).await,
-        Command::CertExclusion { action } => {
-            commands::certificate_based_exclusions::execute(client, action).await
+        DaemonAction::Status { socket } => {
+            let socket_path = daemon::resolve_socket_path(socket.as_deref());
+            let status = daemon::client::status(&socket_path).await;
+            let json = serde_json::to_string_pretty(&status).unwrap();
+            println!("{}", json);
         }
-        Command::CloudAws { action } => {
-            commands::cloud_aws_registration::execute(client, action).await
+    }
+}
+
+async fn handle_daemon_client(cli: &Cli) {
+    let socket_path = daemon::resolve_socket_path(cli.socket.as_deref());
+
+    let token = match &cli.token {
+        Some(t) => t.clone(),
+        None => {
+            eprintln!("Error: FALCON_DAEMON_TOKEN is required when using --daemon");
+            eprintln!("hint: eval \"$(falcon-cli daemon start)\" to set it");
+            std::process::exit(1);
         }
-        Command::CloudAzure { action } => {
-            commands::cloud_azure_registration::execute(client, action).await
+    };
+
+    // Extract command and action from CLI args.
+    let (command, action, args) = match extract_command_args(&cli.command) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
-        Command::CloudConnectAws { action } => {
-            commands::cloud_connect_aws::execute(client, action).await
+    };
+
+    let result = daemon::client::send_command(&socket_path, token, command, action, args).await;
+
+    match result {
+        Ok(value) => {
+            output::print_value(&value, &cli.output, cli.pretty);
         }
-        Command::CloudGcp { action } => {
-            commands::cloud_google_cloud_registration::execute(client, action).await
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
-        Command::CloudOci { action } => {
-            commands::cloud_oci_registration::execute(client, action).await
+    }
+}
+
+/// Extract command name, action name, and arguments from the parsed Command enum.
+/// This reconstructs what the daemon needs to dispatch the command.
+fn extract_command_args(
+    _command: &Command,
+) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {
+    // Serialize the Command to JSON, then extract the structure.
+    // Since Command uses clap Subcommand derive, we use the Debug representation
+    // to extract names. For a cleaner approach, we re-parse from std::env::args.
+    let raw_args: Vec<String> = std::env::args().collect();
+
+    // Find the command and action positions by skipping global flags.
+    let mut command_name = String::new();
+    let mut action_name = String::new();
+    let mut extra_args: HashMap<String, serde_json::Value> = HashMap::new();
+
+    let mut i = 1; // skip binary name
+                   // Skip global flags.
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg == "--daemon" || arg == "--pretty" {
+            i += 1;
+            continue;
         }
-        Command::CloudPolicy { action } => commands::cloud_policies::execute(client, action).await,
-        Command::CloudSecurity { action } => {
-            commands::cloud_security::execute(client, action).await
+        if arg == "--client-id"
+            || arg == "--base-url"
+            || arg == "--member-cid"
+            || arg == "--output"
+            || arg == "--socket"
+            || arg == "--token"
+        {
+            i += 2; // skip flag and its value
+            continue;
         }
-        Command::CloudAsset { action } => {
-            commands::cloud_security_assets::execute(client, action).await
+        if arg.starts_with("--") {
+            // Could be a --flag=value form for global flags.
+            if arg.contains('=') {
+                let key = arg.split('=').next().unwrap();
+                if matches!(
+                    key,
+                    "--client-id"
+                        | "--base-url"
+                        | "--member-cid"
+                        | "--output"
+                        | "--socket"
+                        | "--token"
+                ) {
+                    i += 1;
+                    continue;
+                }
+            }
+            break;
         }
-        Command::CloudCompliance { action } => {
-            commands::cloud_security_compliance::execute(client, action).await
+        break;
+    }
+
+    // Now raw_args[i] should be the command name.
+    if i < raw_args.len() {
+        command_name = raw_args[i].clone();
+        i += 1;
+    }
+
+    // raw_args[i] should be the action name.
+    if i < raw_args.len() && !raw_args[i].starts_with('-') {
+        action_name = raw_args[i].clone();
+        i += 1;
+    }
+
+    // Remaining args are command-specific flags.
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        if arg.starts_with("--") {
+            let key = arg.trim_start_matches("--").to_string();
+
+            if arg.contains('=') {
+                let parts: Vec<&str> = arg.splitn(2, '=').collect();
+                let k = parts[0].trim_start_matches("--").to_string();
+                let v = parts[1].to_string();
+                insert_arg(&mut extra_args, k, v);
+                i += 1;
+            } else if i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
+                let value = raw_args[i + 1].clone();
+                insert_arg(&mut extra_args, key, value);
+                i += 2;
+            } else {
+                // Boolean flag.
+                extra_args.insert(key, serde_json::Value::Bool(true));
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
-        Command::CloudDetection { action } => {
-            commands::cloud_security_detections::execute(client, action).await
+    }
+
+    if command_name.is_empty() {
+        return Err(error::FalconError::Config(
+            "no command specified".to_string(),
+        ));
+    }
+    if action_name.is_empty() {
+        return Err(error::FalconError::Config(
+            "no action specified".to_string(),
+        ));
+    }
+
+    Ok((command_name, action_name, extra_args))
+}
+
+/// Insert an argument, converting to an array if the key already exists (e.g. --id a --id b).
+fn insert_arg(args: &mut HashMap<String, serde_json::Value>, key: String, value: String) {
+    if let Some(existing) = args.get_mut(&key) {
+        match existing {
+            serde_json::Value::Array(arr) => {
+                arr.push(serde_json::Value::String(value));
+            }
+            _ => {
+                let prev = existing.clone();
+                *existing = serde_json::json!([prev, value]);
+            }
         }
-        Command::CloudSnapshot { action } => {
-            commands::cloud_snapshots::execute(client, action).await
-        }
-        Command::ConfigAssessment { action } => {
-            commands::configuration_assessment::execute(client, action).await
-        }
-        Command::ConfigEval { action } => {
-            commands::configuration_assessment_evaluation_logic::execute(client, action).await
-        }
-        Command::ContainerAlert { action } => {
-            commands::container_alerts::execute(client, action).await
-        }
-        Command::ContainerDetection { action } => {
-            commands::container_detections::execute(client, action).await
-        }
-        Command::ContainerCompliance { action } => {
-            commands::container_image_compliance::execute(client, action).await
-        }
-        Command::ContainerImage { action } => {
-            commands::container_images::execute(client, action).await
-        }
-        Command::ContainerPackage { action } => {
-            commands::container_packages::execute(client, action).await
-        }
-        Command::ContainerVuln { action } => {
-            commands::container_vulnerabilities::execute(client, action).await
-        }
-        Command::ContentUpdatePolicy { action } => {
-            commands::content_update_policies::execute(client, action).await
-        }
-        Command::CorrelationRule { action } => {
-            commands::correlation_rules::execute(client, action).await
-        }
-        Command::CorrelationAdmin { action } => {
-            commands::correlation_rules_admin::execute(client, action).await
-        }
-        Command::Cspm { action } => commands::cspm_registration::execute(client, action).await,
-        Command::CustomIoa { action } => commands::custom_ioa::execute(client, action).await,
-        Command::CustomStorage { action } => {
-            commands::custom_storage::execute(client, action).await
-        }
-        Command::D4c { action } => commands::d4c_registration::execute(client, action).await,
-        Command::DataProtection { action } => {
-            commands::data_protection_configuration::execute(client, action).await
-        }
-        Command::Datascanner { action } => commands::datascanner::execute(client, action).await,
-        Command::DeliverySetting { action } => {
-            commands::delivery_settings::execute(client, action).await
-        }
-        Command::Deployment { action } => commands::deployments::execute(client, action).await,
-        Command::Detection { action } => commands::detects::execute(client, action).await,
-        Command::DeviceContent { action } => {
-            commands::device_content::execute(client, action).await
-        }
-        Command::DeviceControlPolicy { action } => {
-            commands::device_control_policies::execute(client, action).await
-        }
-        Command::Discover { action } => commands::discover::execute(client, action).await,
-        Command::Download { action } => commands::downloads::execute(client, action).await,
-        Command::Drift { action } => commands::drift_indicators::execute(client, action).await,
-        Command::EventStream { action } => commands::event_streams::execute(client, action).await,
-        Command::Exposure { action } => {
-            commands::exposure_management::execute(client, action).await
-        }
-        Command::Faas { action } => commands::faas_execution::execute(client, action).await,
-        Command::FalconComplete { action } => {
-            commands::falcon_complete_dashboard::execute(client, action).await
-        }
-        Command::FalconContainer { action } => {
-            commands::falcon_container::execute(client, action).await
-        }
-        Command::Sandbox { action } => commands::falconx_sandbox::execute(client, action).await,
-        Command::Fdr { action } => commands::fdr::execute(client, action).await,
-        Command::Filevantage { action } => commands::filevantage::execute(client, action).await,
-        Command::Firewall { action } => {
-            commands::firewall_management::execute(client, action).await
-        }
-        Command::FirewallPolicy { action } => {
-            commands::firewall_policies::execute(client, action).await
-        }
-        Command::Logscale { action } => commands::foundry_logscale::execute(client, action).await,
-        Command::Host { action } => commands::hosts::execute(client, action).await,
-        Command::HostGroup { action } => commands::host_group::execute(client, action).await,
-        Command::HostMigration { action } => {
-            commands::host_migration::execute(client, action).await
-        }
-        Command::Identity { action } => {
-            commands::identity_protection::execute(client, action).await
-        }
-        Command::ImagePolicy { action } => {
-            commands::image_assessment_policies::execute(client, action).await
-        }
-        Command::Incident { action } => commands::incidents::execute(client, action).await,
-        Command::InstallToken { action } => {
-            commands::installation_tokens::execute(client, action).await
-        }
-        Command::Intel { action } => commands::intel::execute(client, action).await,
-        Command::IntelFeed { action } => {
-            commands::intelligence_feeds::execute(client, action).await
-        }
-        Command::IntelGraph { action } => {
-            commands::intelligence_indicator_graph::execute(client, action).await
-        }
-        Command::IoaExclusion { action } => commands::ioa_exclusions::execute(client, action).await,
-        Command::Ioc { action } => commands::ioc::execute(client, action).await,
-        Command::Iocs { action } => commands::iocs::execute(client, action).await,
-        Command::ItAutomation { action } => commands::it_automation::execute(client, action).await,
-        Command::K8sCompliance { action } => {
-            commands::kubernetes_container_compliance::execute(client, action).await
-        }
-        Command::K8s { action } => commands::kubernetes_protection::execute(client, action).await,
-        Command::Malquery { action } => commands::malquery::execute(client, action).await,
-        Command::Message { action } => commands::message_center::execute(client, action).await,
-        Command::MlExclusion { action } => commands::ml_exclusions::execute(client, action).await,
-        Command::Mobile { action } => commands::mobile_enrollment::execute(client, action).await,
-        Command::Mssp { action } => commands::mssp::execute(client, action).await,
-        Command::Ngsiem { action } => commands::ngsiem::execute(client, action).await,
-        Command::Oauth2 { action } => commands::oauth2::execute(client, action).await,
-        Command::Ods { action } => commands::ods::execute(client, action).await,
-        Command::Overwatch { action } => {
-            commands::overwatch_dashboard::execute(client, action).await
-        }
-        Command::PreventionPolicy { action } => {
-            commands::prevention_policies::execute(client, action).await
-        }
-        Command::Quarantine { action } => commands::quarantine::execute(client, action).await,
-        Command::QuickScan { action } => commands::quick_scan::execute(client, action).await,
-        Command::QuickScanPro { action } => commands::quick_scan_pro::execute(client, action).await,
-        Command::Rtr { action } => commands::real_time_response::execute(client, action).await,
-        Command::RtrAdmin { action } => {
-            commands::real_time_response_admin::execute(client, action).await
-        }
-        Command::RtrAudit { action } => {
-            commands::real_time_response_audit::execute(client, action).await
-        }
-        Command::Recon { action } => commands::recon::execute(client, action).await,
-        Command::ReportExecution { action } => {
-            commands::report_executions::execute(client, action).await
-        }
-        Command::ResponsePolicy { action } => {
-            commands::response_policies::execute(client, action).await
-        }
-        Command::SaasSecurity { action } => commands::saas_security::execute(client, action).await,
-        Command::Sample { action } => commands::sample_uploads::execute(client, action).await,
-        Command::ScheduledReport { action } => {
-            commands::scheduled_reports::execute(client, action).await
-        }
-        Command::SensorDownload { action } => {
-            commands::sensor_download::execute(client, action).await
-        }
-        Command::SensorUpdatePolicy { action } => {
-            commands::sensor_update_policies::execute(client, action).await
-        }
-        Command::SensorUsage { action } => commands::sensor_usage::execute(client, action).await,
-        Command::SvExclusion { action } => {
-            commands::sensor_visibility_exclusions::execute(client, action).await
-        }
-        Command::ServerlessVuln { action } => {
-            commands::serverless_vulnerabilities::execute(client, action).await
-        }
-        Command::SpotlightVuln { action } => {
-            commands::spotlight_vulnerabilities::execute(client, action).await
-        }
-        Command::SpotlightEval { action } => {
-            commands::spotlight_evaluation_logic::execute(client, action).await
-        }
-        Command::SpotlightMetadata { action } => {
-            commands::spotlight_vulnerability_metadata::execute(client, action).await
-        }
-        Command::TailoredIntel { action } => {
-            commands::tailored_intelligence::execute(client, action).await
-        }
-        Command::Threatgraph { action } => commands::threatgraph::execute(client, action).await,
-        Command::UnidentifiedContainer { action } => {
-            commands::unidentified_containers::execute(client, action).await
-        }
-        Command::User { action } => commands::user_management::execute(client, action).await,
-        Command::Workflow { action } => commands::workflows::execute(client, action).await,
-        Command::ZeroTrust { action } => {
-            commands::zero_trust_assessment::execute(client, action).await
-        }
+    } else {
+        args.insert(key, serde_json::Value::String(value));
     }
 }
