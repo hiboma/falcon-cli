@@ -35,6 +35,8 @@ fn get_peer_pid(stream: &tokio::net::UnixStream) -> Result<i32, String> {
     let mut pid: libc::pid_t = 0;
     let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
 
+    // SAFETY: fd is a valid socket file descriptor from the accepted connection.
+    // pid and len are valid mutable pointers with correct sizes.
     let ret = unsafe {
         libc::getsockopt(
             fd,
@@ -157,6 +159,14 @@ fn verify_same_signing_identity(self_path: &str, peer_path: &str) -> Result<bool
     // This is simpler and more reliable than FFI for SecCodeCopySigningInformation.
     let self_ident = get_signing_identifier_via_codesign(self_path)?;
 
+    // Sanitize identifier to prevent SecRequirement string injection.
+    if !self_ident
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        return Err(format!("invalid signing identifier: {}", self_ident));
+    }
+
     // Build a SecRequirement that matches the identifier.
     let req_str = format!("identifier \"{}\"", self_ident);
     let cf_req_str = CFString::new(&req_str);
@@ -200,7 +210,7 @@ fn verify_same_signing_identity(self_path: &str, peer_path: &str) -> Result<bool
 /// This avoids the need for `SecCodeCopySigningInformation` FFI bindings.
 #[cfg(target_os = "macos")]
 fn get_signing_identifier_via_codesign(path: &str) -> Result<String, String> {
-    let output = std::process::Command::new("codesign")
+    let output = std::process::Command::new("/usr/bin/codesign")
         .args(["-d", "-vvv", path])
         .output()
         .map_err(|e| format!("failed to execute codesign: {}", e))?;
