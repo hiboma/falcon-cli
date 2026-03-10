@@ -106,7 +106,8 @@ async fn handle_daemon_command(action: &DaemonAction, cli: &Cli) {
         DaemonAction::Status { socket } => {
             let socket_path = daemon::resolve_socket_path(socket.as_deref());
             let status = daemon::client::status(&socket_path).await;
-            let json = serde_json::to_string_pretty(&status).unwrap();
+            let json = serde_json::to_string_pretty(&status)
+                .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
             println!("{}", json);
         }
     }

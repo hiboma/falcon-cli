@@ -28,6 +28,7 @@ pub fn resolve_socket_path(explicit: Option<&str>) -> PathBuf {
             .join(SOCKET_FILE);
     }
 
+    // SAFETY: getuid() is always safe with no side effects.
     let uid = unsafe { libc::getuid() };
     PathBuf::from(format!("/tmp/{}-{}", SOCKET_DIR, uid)).join(SOCKET_FILE)
 }

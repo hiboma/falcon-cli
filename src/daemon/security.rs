@@ -82,19 +82,25 @@ impl CommandWhitelist {
 /// Simple token bucket rate limiter.
 pub struct RateLimiter {
     max_tokens: u32,
-    tokens: Mutex<f64>,
-    last_refill: Mutex<Instant>,
+    state: Mutex<RateLimiterState>,
     refill_rate: f64, // tokens per second
     total_requests: AtomicU64,
     denied_requests: AtomicU64,
+}
+
+struct RateLimiterState {
+    tokens: f64,
+    last_refill: Instant,
 }
 
 impl RateLimiter {
     pub fn new(requests_per_minute: u32) -> Self {
         Self {
             max_tokens: requests_per_minute,
-            tokens: Mutex::new(requests_per_minute as f64),
-            last_refill: Mutex::new(Instant::now()),
+            state: Mutex::new(RateLimiterState {
+                tokens: requests_per_minute as f64,
+                last_refill: Instant::now(),
+            }),
             refill_rate: requests_per_minute as f64 / 60.0,
             total_requests: AtomicU64::new(0),
             denied_requests: AtomicU64::new(0),
@@ -105,16 +111,15 @@ impl RateLimiter {
     pub fn try_acquire(&self) -> bool {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
-        let mut tokens = self.tokens.lock().unwrap();
-        let mut last_refill = self.last_refill.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
 
         let now = Instant::now();
-        let elapsed = now.duration_since(*last_refill).as_secs_f64();
-        *tokens = (*tokens + elapsed * self.refill_rate).min(self.max_tokens as f64);
-        *last_refill = now;
+        let elapsed = now.duration_since(state.last_refill).as_secs_f64();
+        state.tokens = (state.tokens + elapsed * self.refill_rate).min(self.max_tokens as f64);
+        state.last_refill = now;
 
-        if *tokens >= 1.0 {
-            *tokens -= 1.0;
+        if state.tokens >= 1.0 {
+            state.tokens -= 1.0;
             true
         } else {
             self.denied_requests.fetch_add(1, Ordering::Relaxed);
@@ -169,6 +174,7 @@ impl AuditLog {
 #[cfg(unix)]
 pub fn verify_peer_uid(peer_cred: Option<u32>) -> bool {
     match peer_cred {
+        // SAFETY: getuid() is always safe with no side effects.
         Some(uid) => uid == unsafe { libc::getuid() },
         None => false,
     }
