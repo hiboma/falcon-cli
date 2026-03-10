@@ -1,5 +1,3 @@
-use std::os::unix::io::AsRawFd;
-
 /// Result of peer process verification.
 #[derive(Debug)]
 pub struct PeerVerification {
@@ -27,6 +25,8 @@ pub fn verify_peer(stream: &tokio::net::UnixStream) -> Result<PeerVerification, 
 
 #[cfg(target_os = "macos")]
 fn get_peer_pid(stream: &tokio::net::UnixStream) -> Result<i32, String> {
+    use std::os::unix::io::AsRawFd;
+
     // macOS: SOL_LOCAL = 0, LOCAL_PEERPID = 0x002
     const SOL_LOCAL: libc::c_int = 0;
     const LOCAL_PEERPID: libc::c_int = 0x002;
