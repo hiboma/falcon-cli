@@ -5,6 +5,13 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
+use tokio::sync::Semaphore;
+
+/// Maximum size of a single request line (1 MiB).
+const MAX_REQUEST_SIZE: usize = 1024 * 1024;
+
+/// Maximum number of concurrent connections.
+const MAX_CONNECTIONS: usize = 64;
 
 /// Start the daemon server.
 pub async fn start(
@@ -52,14 +59,16 @@ pub async fn start(
     }
 
     // Remove stale socket file.
-    if socket_path.exists() {
-        std::fs::remove_file(socket_path).map_err(|e| {
-            crate::error::FalconError::Config(format!(
+    match std::fs::remove_file(socket_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(crate::error::FalconError::Config(format!(
                 "failed to remove stale socket {}: {}",
                 socket_path.display(),
                 e
-            ))
-        })?;
+            )));
+        }
     }
 
     // Bind the Unix listener.
@@ -75,7 +84,7 @@ pub async fn start(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o700)).map_err(
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600)).map_err(
             |e| {
                 crate::error::FalconError::Config(format!(
                     "failed to set socket permissions: {}",
@@ -140,6 +149,8 @@ async fn accept_loop(
     handler: Arc<RequestHandler>,
     _start_time: std::time::Instant,
 ) {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
     loop {
         match listener.accept().await {
             Ok((stream, _addr)) => {
@@ -175,10 +186,18 @@ async fn accept_loop(
                 }
 
                 let handler = handler.clone();
+                let permit = match semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        eprintln!("daemon: rejected connection, max connections reached");
+                        continue;
+                    }
+                };
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, handler).await {
                         eprintln!("daemon: connection error: {}", e);
                     }
+                    drop(permit);
                 });
             }
             Err(e) => {
@@ -204,6 +223,19 @@ async fn handle_connection(
             break;
         }
 
+        if n > MAX_REQUEST_SIZE {
+            let error_resp = crate::daemon::protocol::DaemonResponse::error(
+                "unknown".to_string(),
+                "protocol",
+                format!("request too large: {} bytes (max {})", n, MAX_REQUEST_SIZE),
+            );
+            let mut resp_json =
+                serde_json::to_string(&error_resp).unwrap_or_else(|_| String::new());
+            resp_json.push('\n');
+            writer.write_all(resp_json.as_bytes()).await?;
+            break;
+        }
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -217,7 +249,8 @@ async fn handle_connection(
                     "protocol",
                     format!("invalid request JSON: {}", e),
                 );
-                let mut resp_json = serde_json::to_string(&error_resp).unwrap();
+                let mut resp_json =
+                    serde_json::to_string(&error_resp).unwrap_or_else(|_| String::new());
                 resp_json.push('\n');
                 writer.write_all(resp_json.as_bytes()).await?;
                 continue;
@@ -225,7 +258,7 @@ async fn handle_connection(
         };
 
         let response = handler.handle(request).await;
-        let mut resp_json = serde_json::to_string(&response).unwrap();
+        let mut resp_json = serde_json::to_string(&response).unwrap_or_else(|_| String::new());
         resp_json.push('\n');
         writer.write_all(resp_json.as_bytes()).await?;
     }
@@ -237,8 +270,8 @@ async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
     {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         tokio::select! {
             _ = ctrl_c => {}
             _ = sigterm.recv() => {}
