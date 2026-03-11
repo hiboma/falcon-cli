@@ -1,6 +1,7 @@
 pub mod alerts;
 pub mod api_integrations;
 pub mod aspm;
+pub mod automated_lead;
 pub mod cao_hunting;
 pub mod case_management;
 pub mod certificate_based_exclusions;

@@ -6,13 +6,23 @@ mod config;
 mod error;
 mod output;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{Cli, Command};
 use config::Config;
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    if let Command::Completion { shell } = cli.command {
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "falcon-cli",
+            &mut std::io::stdout(),
+        );
+        return;
+    }
 
     let config = match build_config(&cli) {
         Ok(c) => c,
@@ -60,6 +70,9 @@ async fn execute(
 ) -> error::Result<serde_json::Value> {
     match command {
         Command::Alert { action } => commands::alerts::execute(client, action).await,
+        Command::AutomatedLead { action } => {
+            commands::automated_lead::execute(client, action).await
+        }
         Command::ApiIntegration { action } => {
             commands::api_integrations::execute(client, action).await
         }
@@ -278,5 +291,6 @@ async fn execute(
         Command::ZeroTrust { action } => {
             commands::zero_trust_assessment::execute(client, action).await
         }
+        Command::Completion { .. } => unreachable!(),
     }
 }
