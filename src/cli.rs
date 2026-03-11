@@ -65,8 +65,8 @@ Platform & Integration:
   correlation-admin, custom-storage, delivery-setting, fdr,
   firewall, logscale, ngsiem, sample, saas-security, faas
 
-Daemon:
-  daemon
+Agent:
+  agent
 ";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -105,12 +105,12 @@ pub struct Cli {
     #[arg(long)]
     pub pretty: bool,
 
-    /// Path to the daemon Unix domain socket
-    #[arg(long, env = "FALCON_DAEMON_SOCKET", hide_env = true, hide = true)]
+    /// Path to the agent Unix domain socket
+    #[arg(long, env = "FALCON_AGENT_SOCKET", hide_env = true, hide = true)]
     pub socket: Option<String>,
 
-    /// Daemon session token (issued at daemon startup)
-    #[arg(long, env = "FALCON_DAEMON_TOKEN", hide_env = true, hide = true)]
+    /// Agent session token (issued at agent startup)
+    #[arg(long, env = "FALCON_AGENT_TOKEN", hide_env = true, hide = true)]
     pub token: Option<String>,
 
     #[command(subcommand)]
@@ -784,40 +784,40 @@ pub enum Command {
         action: commands::automated_lead::Action,
     },
 
-    // ── Daemon ──
-    /// Manage the falcon-cli daemon for credential isolation
-    #[command(next_help_heading = "Daemon")]
-    Daemon {
+    // ── Agent ──
+    /// Credential agent for API access isolation (ssh-agent model)
+    #[command(next_help_heading = "Agent")]
+    Agent {
         #[command(subcommand)]
-        action: DaemonAction,
+        action: AgentAction,
     },
 }
 
-/// Daemon subcommand actions.
+/// Agent subcommand actions (ssh-agent style credential agent).
 #[derive(Subcommand, Debug)]
-pub enum DaemonAction {
-    /// Start the daemon server (run under `op run`)
+pub enum AgentAction {
+    /// Start the credential agent (run under `op run`, like ssh-agent)
     Start {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<String>,
-        /// Path to the daemon configuration file
+        /// Path to the agent configuration file
         #[arg(long)]
         config: Option<String>,
-        /// Run in the foreground (do not daemonize)
+        /// Run in the foreground (do not fork into background)
         #[arg(long)]
         foreground: bool,
     },
-    /// Stop the running daemon
+    /// Stop the running agent
     Stop {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<String>,
-        /// Stop all running daemon instances
+        /// Stop all running agent instances
         #[arg(long)]
         all: bool,
     },
-    /// Show daemon status
+    /// Show agent status
     Status {
         /// Path to the Unix domain socket
         #[arg(long)]

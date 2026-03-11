@@ -227,9 +227,9 @@ pub async fn execute(client: &FalconClient, command: Command) -> error::Result<s
         Command::ZeroTrust { action } => {
             commands::zero_trust_assessment::execute(client, action).await
         }
-        // Daemon subcommand is handled in main.rs, not dispatched to FalconClient.
-        Command::Daemon { .. } => Err(crate::error::FalconError::Config(
-            "daemon command cannot be dispatched".to_string(),
+        // Agent subcommand is handled in main.rs, not dispatched to FalconClient.
+        Command::Agent { .. } => Err(crate::error::FalconError::Config(
+            "agent command cannot be dispatched".to_string(),
         )),
     }
 }

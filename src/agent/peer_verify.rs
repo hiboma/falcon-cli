@@ -109,7 +109,7 @@ fn verify_binary(peer_exe_path: &str) -> Result<bool, String> {
     // Validate the peer binary's code signature and check that both binaries
     // share the same signing identity using SecRequirement.
     match (is_signed(&self_exe), is_signed(peer_exe_path)) {
-        // Both signed: verify the peer matches daemon's signing identifier.
+        // Both signed: verify the peer matches agent's signing identifier.
         (true, true) => verify_same_signing_identity(&self_exe, peer_exe_path),
         // Both unsigned: allow (development scenario).
         (false, false) => Ok(true),
@@ -145,7 +145,7 @@ fn is_signed(path: &str) -> bool {
 }
 
 /// Verify that two binaries have the same signing identity by extracting the
-/// daemon's identifier and checking the peer against it via SecRequirement.
+/// agent's identifier and checking the peer against it via SecRequirement.
 #[cfg(target_os = "macos")]
 fn verify_same_signing_identity(self_path: &str, peer_path: &str) -> Result<bool, String> {
     use core_foundation::base::TCFType;
@@ -155,7 +155,7 @@ fn verify_same_signing_identity(self_path: &str, peer_path: &str) -> Result<bool
     use security_framework_sys::code_signing::*;
     use std::ptr;
 
-    // Get daemon's signing identifier via codesign command.
+    // Get agent's signing identifier via codesign command.
     // This is simpler and more reliable than FFI for SecCodeCopySigningInformation.
     let self_ident = get_signing_identifier_via_codesign(self_path)?;
 

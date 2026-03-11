@@ -1,6 +1,6 @@
-use crate::daemon::handler::RequestHandler;
-use crate::daemon::protocol::DaemonRequest;
-use crate::daemon::security::{CommandWhitelist, RateLimiter, SecurityConfig};
+use crate::agent::handler::RequestHandler;
+use crate::agent::protocol::AgentRequest;
+use crate::agent::security::{CommandWhitelist, RateLimiter, SecurityConfig};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -21,9 +21,9 @@ const IDLE_TIMEOUT_SECS: u64 = 8 * 60 * 60;
 /// Interval to check parent process liveness and idle timeout.
 const WATCHDOG_INTERVAL_SECS: u64 = 30;
 
-/// Start the daemon server.
+/// Start the agent server.
 ///
-/// By default, the daemon forks into the background (like ssh-agent).
+/// By default, the agent forks into the background (like ssh-agent).
 /// The parent process outputs shell variables to stdout and exits.
 /// Use `--foreground` to run in the foreground without forking.
 pub fn start(
@@ -85,7 +85,7 @@ pub fn start(
     }
 
     // Generate session token before fork so the parent can output it.
-    let session_token = crate::daemon::generate_token();
+    let session_token = crate::agent::generate_token();
 
     if foreground {
         // Run in the foreground (no fork).
@@ -94,7 +94,7 @@ pub fn start(
         })?;
         // SAFETY: getppid() is always safe.
         let parent_pid = unsafe { libc::getppid() };
-        rt.block_on(run_daemon(
+        rt.block_on(run_agent(
             falcon_client,
             socket_path,
             whitelist,
@@ -105,7 +105,7 @@ pub fn start(
         ))
     } else {
         // Fork into the background (ssh-agent style).
-        daemonize(
+        fork_into_background(
             falcon_client,
             socket_path,
             whitelist,
@@ -115,10 +115,10 @@ pub fn start(
     }
 }
 
-/// Fork the daemon process into the background.
+/// Fork the agent process into the background.
 /// The parent outputs SSH Agent-style shell variables and exits.
-/// The child runs the daemon server.
-fn daemonize(
+/// The child runs the agent server.
+fn fork_into_background(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
     whitelist: Arc<CommandWhitelist>,
@@ -141,12 +141,12 @@ fn daemonize(
             std::io::Error::last_os_error()
         ))),
         0 => {
-            // Child process: become session leader and run daemon.
+            // Child process: become session leader and run agent.
             // SAFETY: setsid() is always safe.
             unsafe { libc::setsid() };
 
-            // Generate a unique socket path using the daemon PID.
-            let actual_socket_path = crate::daemon::generate_socket_path();
+            // Generate a unique socket path using the agent PID.
+            let actual_socket_path = crate::agent::generate_socket_path();
 
             // Redirect stdin/stdout to /dev/null, stderr to log file.
             redirect_stdio(&actual_socket_path);
@@ -154,7 +154,7 @@ fn daemonize(
             let rt = tokio::runtime::Runtime::new().map_err(|e| {
                 crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
             })?;
-            rt.block_on(run_daemon(
+            rt.block_on(run_agent(
                 falcon_client,
                 &actual_socket_path,
                 whitelist,
@@ -172,15 +172,15 @@ fn daemonize(
                 .unwrap_or(Path::new("/tmp"))
                 .join(format!("falcon-{}.sock", child_pid));
             println!(
-                "FALCON_DAEMON_SOCKET={}; export FALCON_DAEMON_SOCKET;",
+                "FALCON_AGENT_SOCKET={}; export FALCON_AGENT_SOCKET;",
                 actual_socket_path.display()
             );
             println!(
-                "FALCON_DAEMON_TOKEN={}; export FALCON_DAEMON_TOKEN;",
+                "FALCON_AGENT_TOKEN={}; export FALCON_AGENT_TOKEN;",
                 session_token
             );
-            println!("FALCON_DAEMON_PID={}; export FALCON_DAEMON_PID;", child_pid);
-            println!("echo daemon started, pid {};", child_pid);
+            println!("FALCON_AGENT_PID={}; export FALCON_AGENT_PID;", child_pid);
+            println!("echo agent started, pid {};", child_pid);
             Ok(())
         }
     }
@@ -220,8 +220,8 @@ fn redirect_stdio(socket_path: &Path) {
     }
 }
 
-/// Run the daemon server (binds socket, accepts connections, handles shutdown).
-async fn run_daemon(
+/// Run the agent server (binds socket, accepts connections, handles shutdown).
+async fn run_agent(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
     whitelist: Arc<CommandWhitelist>,
@@ -254,7 +254,7 @@ async fn run_daemon(
     }
 
     // Write PID file.
-    let pid_path = crate::daemon::resolve_pid_path(socket_path);
+    let pid_path = crate::agent::resolve_pid_path(socket_path);
     std::fs::write(&pid_path, std::process::id().to_string()).map_err(|e| {
         crate::error::FalconError::Config(format!("failed to write PID file: {}", e))
     })?;
@@ -272,19 +272,19 @@ async fn run_daemon(
     if print_env {
         // Foreground mode: output shell variables to stdout.
         println!(
-            "FALCON_DAEMON_SOCKET={}; export FALCON_DAEMON_SOCKET;",
+            "FALCON_AGENT_SOCKET={}; export FALCON_AGENT_SOCKET;",
             socket_path.display()
         );
         println!(
-            "FALCON_DAEMON_TOKEN={}; export FALCON_DAEMON_TOKEN;",
+            "FALCON_AGENT_TOKEN={}; export FALCON_AGENT_TOKEN;",
             session_token
         );
-        println!("echo daemon started, pid {};", std::process::id());
+        println!("echo agent started, pid {};", std::process::id());
     }
 
-    eprintln!("daemon: listening on {}", socket_path.display());
-    eprintln!("daemon: PID {}", std::process::id());
-    eprintln!("daemon: parent shell PID {}", parent_pid);
+    eprintln!("agent: listening on {}", socket_path.display());
+    eprintln!("agent: PID {}", std::process::id());
+    eprintln!("agent: parent shell PID {}", parent_pid);
 
     // Accept loop with graceful shutdown on SIGTERM/SIGINT,
     // parent process exit detection, and idle timeout.
@@ -294,17 +294,17 @@ async fn run_daemon(
     tokio::select! {
         _ = accept_loop(&listener, handler, last_activity.clone()) => {}
         _ = shutdown_signal() => {
-            eprintln!("daemon: shutting down (signal)");
+            eprintln!("agent: shutting down (signal)");
         }
         reason = watchdog(parent_pid, last_activity) => {
-            eprintln!("daemon: shutting down ({})", reason);
+            eprintln!("agent: shutting down ({})", reason);
         }
     }
 
     // Cleanup.
     let _ = std::fs::remove_file(&socket_path_owned);
     let _ = std::fs::remove_file(&pid_path_owned);
-    eprintln!("daemon: stopped");
+    eprintln!("agent: stopped");
 
     Ok(())
 }
@@ -323,29 +323,29 @@ async fn accept_loop(
                 #[cfg(unix)]
                 {
                     let peer_uid = stream.peer_cred().ok().map(|cred| cred.uid());
-                    if !crate::daemon::security::verify_peer_uid(peer_uid) {
-                        eprintln!("daemon: rejected connection from unauthorized UID");
+                    if !crate::agent::security::verify_peer_uid(peer_uid) {
+                        eprintln!("agent: rejected connection from unauthorized UID");
                         continue;
                     }
                 }
 
                 // Verify peer process (code signature on macOS, path match on Linux).
-                match crate::daemon::peer_verify::verify_peer(&stream) {
+                match crate::agent::peer_verify::verify_peer(&stream) {
                     Ok(verification) => {
                         if !verification.signature_valid {
                             eprintln!(
-                                "daemon: rejected connection from unverified binary pid={} path={}",
+                                "agent: rejected connection from unverified binary pid={} path={}",
                                 verification.pid, verification.exe_path,
                             );
                             continue;
                         }
                         eprintln!(
-                            "daemon: accepted connection pid={} path={}",
+                            "agent: accepted connection pid={} path={}",
                             verification.pid, verification.exe_path,
                         );
                     }
                     Err(e) => {
-                        eprintln!("daemon: peer verification failed: {}", e);
+                        eprintln!("agent: peer verification failed: {}", e);
                         continue;
                     }
                 }
@@ -356,19 +356,19 @@ async fn accept_loop(
                 let permit = match semaphore.clone().try_acquire_owned() {
                     Ok(p) => p,
                     Err(_) => {
-                        eprintln!("daemon: rejected connection, max connections reached");
+                        eprintln!("agent: rejected connection, max connections reached");
                         continue;
                     }
                 };
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, handler).await {
-                        eprintln!("daemon: connection error: {}", e);
+                        eprintln!("agent: connection error: {}", e);
                     }
                     drop(permit);
                 });
             }
             Err(e) => {
-                eprintln!("daemon: accept error: {}", e);
+                eprintln!("agent: accept error: {}", e);
             }
         }
     }
@@ -391,7 +391,7 @@ async fn handle_connection(
         }
 
         if n > MAX_REQUEST_SIZE {
-            let error_resp = crate::daemon::protocol::DaemonResponse::error(
+            let error_resp = crate::agent::protocol::AgentResponse::error(
                 "unknown".to_string(),
                 "protocol",
                 format!("request too large: {} bytes (max {})", n, MAX_REQUEST_SIZE),
@@ -408,10 +408,10 @@ async fn handle_connection(
             continue;
         }
 
-        let request: DaemonRequest = match serde_json::from_str(trimmed) {
+        let request: AgentRequest = match serde_json::from_str(trimmed) {
             Ok(r) => r,
             Err(e) => {
-                let error_resp = crate::daemon::protocol::DaemonResponse::error(
+                let error_resp = crate::agent::protocol::AgentResponse::error(
                     "unknown".to_string(),
                     "protocol",
                     format!("invalid request JSON: {}", e),
@@ -451,7 +451,7 @@ async fn shutdown_signal() {
 }
 
 /// Watchdog task: checks parent process liveness and idle timeout.
-/// Returns a reason string when the daemon should shut down.
+/// Returns a reason string when the agent should shut down.
 async fn watchdog(parent_pid: libc::pid_t, last_activity: Arc<AtomicU64>) -> &'static str {
     let mut interval =
         tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
@@ -487,13 +487,13 @@ fn dirs_config_path() -> std::path::PathBuf {
     if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
         return std::path::PathBuf::from(config_home)
             .join("falcon-cli")
-            .join("daemon.toml");
+            .join("agent.toml");
     }
     if let Ok(home) = std::env::var("HOME") {
         return std::path::PathBuf::from(home)
             .join(".config")
             .join("falcon-cli")
-            .join("daemon.toml");
+            .join("agent.toml");
     }
-    std::path::PathBuf::from("/etc/falcon-cli/daemon.toml")
+    std::path::PathBuf::from("/etc/falcon-cli/agent.toml")
 }

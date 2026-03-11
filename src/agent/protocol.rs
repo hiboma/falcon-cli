@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// A request sent from client to daemon over the Unix domain socket.
+/// A request sent from client to agent over the Unix domain socket.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DaemonRequest {
+pub struct AgentRequest {
     /// Unique request identifier.
     pub id: String,
-    /// Authentication token issued at daemon startup.
+    /// Authentication token issued at agent startup.
     pub token: String,
     /// Top-level command name (e.g. "alert", "host").
     pub command: String,
@@ -17,9 +17,9 @@ pub struct DaemonRequest {
     pub args: HashMap<String, serde_json::Value>,
 }
 
-/// A response sent from daemon to client over the Unix domain socket.
+/// A response sent from agent to client over the Unix domain socket.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DaemonResponse {
+pub struct AgentResponse {
     /// Matches the request ID.
     pub id: String,
     /// Status: "ok" or "error".
@@ -32,7 +32,7 @@ pub struct DaemonResponse {
     pub error: Option<ErrorDetail>,
 }
 
-/// Error detail in a daemon response.
+/// Error detail in a agent response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorDetail {
     /// Error category (e.g. "auth", "api", "config", "denied", "rate_limited").
@@ -41,7 +41,7 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-impl DaemonRequest {
+impl AgentRequest {
     /// Create a new request with a generated UUID and the given token.
     pub fn new(
         token: String,
@@ -59,7 +59,7 @@ impl DaemonRequest {
     }
 }
 
-impl DaemonResponse {
+impl AgentResponse {
     /// Create a success response.
     pub fn ok(id: String, data: serde_json::Value) -> Self {
         Self {
@@ -84,9 +84,9 @@ impl DaemonResponse {
     }
 }
 
-/// Status response for `daemon status` command.
+/// Status response for `agent status` command.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DaemonStatus {
+pub struct AgentStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub socket_path: String,
@@ -106,14 +106,14 @@ mod tests {
         );
         args.insert("limit".to_string(), serde_json::json!(100));
 
-        let req = DaemonRequest::new(
+        let req = AgentRequest::new(
             "test-token".to_string(),
             "alert".to_string(),
             "list".to_string(),
             args,
         );
         let json = serde_json::to_string(&req).unwrap();
-        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        let deserialized: AgentRequest = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.command, "alert");
         assert_eq!(deserialized.action, "list");
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_response_ok_serialization() {
-        let resp = DaemonResponse::ok("test-id".to_string(), serde_json::json!({"resources": []}));
+        let resp = AgentResponse::ok("test-id".to_string(), serde_json::json!({"resources": []}));
         let json = serde_json::to_string(&resp).unwrap();
         assert!(!json.contains("error"));
         assert!(json.contains("\"status\":\"ok\""));
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_response_error_serialization() {
-        let resp = DaemonResponse::error("test-id".to_string(), "api", "not found".to_string());
+        let resp = AgentResponse::error("test-id".to_string(), "api", "not found".to_string());
         let json = serde_json::to_string(&resp).unwrap();
         assert!(!json.contains("data"));
         assert!(json.contains("\"status\":\"error\""));

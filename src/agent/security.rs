@@ -45,7 +45,7 @@ impl SecurityConfig {
         match std::fs::read_to_string(path) {
             Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
                 eprintln!(
-                    "warning: failed to parse daemon config {}: {}",
+                    "warning: failed to parse agent config {}: {}",
                     path.display(),
                     e
                 );
@@ -170,7 +170,7 @@ impl AuditLog {
     }
 }
 
-/// Verify that the connecting peer has the same UID as the daemon process.
+/// Verify that the connecting peer has the same UID as the agent process.
 #[cfg(unix)]
 pub fn verify_peer_uid(peer_cred: Option<u32>) -> bool {
     match peer_cred {

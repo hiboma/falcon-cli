@@ -1,4 +1,4 @@
-use crate::daemon::protocol::{DaemonRequest, DaemonResponse, DaemonStatus};
+use crate::agent::protocol::{AgentRequest, AgentResponse, AgentStatus};
 use crate::error::{FalconError, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -6,10 +6,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::time::{timeout, Duration};
 
-/// Default timeout for daemon requests (30 seconds).
+/// Default timeout for agent requests (30 seconds).
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-/// Send a command to the daemon and return the response.
+/// Send a command to the agent and return the response.
 pub async fn send_command(
     socket_path: &Path,
     token: String,
@@ -19,7 +19,7 @@ pub async fn send_command(
 ) -> Result<serde_json::Value> {
     let stream = connect(socket_path).await?;
 
-    let request = DaemonRequest::new(token, command, action, args);
+    let request = AgentRequest::new(token, command, action, args);
     let response = send_request(stream, &request).await?;
 
     match response.status.as_str() {
@@ -27,7 +27,7 @@ pub async fn send_command(
         _ => {
             let detail = response
                 .error
-                .unwrap_or(crate::daemon::protocol::ErrorDetail {
+                .unwrap_or(crate::agent::protocol::ErrorDetail {
                     kind: "unknown".to_string(),
                     message: "unknown error".to_string(),
                 });
@@ -39,12 +39,12 @@ pub async fn send_command(
     }
 }
 
-/// Check the status of the daemon.
-pub async fn status(socket_path: &Path) -> DaemonStatus {
+/// Check the status of the agent.
+pub async fn status(socket_path: &Path) -> AgentStatus {
     let pid = read_pid(socket_path);
     let running = check_running(socket_path).await;
 
-    DaemonStatus {
+    AgentStatus {
         running,
         pid,
         socket_path: socket_path.display().to_string(),
@@ -52,9 +52,9 @@ pub async fn status(socket_path: &Path) -> DaemonStatus {
     }
 }
 
-/// Stop the daemon by sending SIGTERM to the PID.
+/// Stop the agent by sending SIGTERM to the PID.
 pub fn stop(socket_path: &Path) -> Result<()> {
-    let pid_path = crate::daemon::resolve_pid_path(socket_path);
+    let pid_path = crate::agent::resolve_pid_path(socket_path);
     let pid = std::fs::read_to_string(&pid_path)
         .map_err(|e| FalconError::Config(format!("failed to read PID file: {}", e)))?
         .trim()
@@ -72,15 +72,15 @@ pub fn stop(socket_path: &Path) -> Result<()> {
         }
     }
 
-    eprintln!("sent SIGTERM to daemon (PID {})", pid);
+    eprintln!("sent SIGTERM to agent (PID {})", pid);
     Ok(())
 }
 
-/// Stop all running daemon instances.
+/// Stop all running agent instances.
 pub fn stop_all() -> Result<()> {
-    let sockets = crate::daemon::list_daemon_sockets();
+    let sockets = crate::agent::list_agent_sockets();
     if sockets.is_empty() {
-        eprintln!("no running daemons found");
+        eprintln!("no running agents found");
         return Ok(());
     }
 
@@ -89,7 +89,7 @@ pub fn stop_all() -> Result<()> {
         match stop(socket_path) {
             Ok(()) => {}
             Err(e) => {
-                eprintln!("failed to stop daemon at {}: {}", socket_path.display(), e);
+                eprintln!("failed to stop agent at {}: {}", socket_path.display(), e);
                 errors += 1;
             }
         }
@@ -97,12 +97,12 @@ pub fn stop_all() -> Result<()> {
 
     if errors > 0 {
         Err(FalconError::Config(format!(
-            "failed to stop {} of {} daemons",
+            "failed to stop {} of {} agents",
             errors,
             sockets.len()
         )))
     } else {
-        eprintln!("stopped {} daemon(s)", sockets.len());
+        eprintln!("stopped {} agent(s)", sockets.len());
         Ok(())
     }
 }
@@ -110,10 +110,10 @@ pub fn stop_all() -> Result<()> {
 async fn connect(socket_path: &Path) -> Result<UnixStream> {
     let stream = timeout(Duration::from_secs(5), UnixStream::connect(socket_path))
         .await
-        .map_err(|_| FalconError::Config("connection to daemon timed out".to_string()))?
+        .map_err(|_| FalconError::Config("connection to agent timed out".to_string()))?
         .map_err(|e| {
             FalconError::Config(format!(
-                "failed to connect to daemon at {}: {} (is the daemon running?)",
+                "failed to connect to agent at {}: {} (is the agent running?)",
                 socket_path.display(),
                 e
             ))
@@ -122,7 +122,7 @@ async fn connect(socket_path: &Path) -> Result<UnixStream> {
     Ok(stream)
 }
 
-async fn send_request(stream: UnixStream, request: &DaemonRequest) -> Result<DaemonResponse> {
+async fn send_request(stream: UnixStream, request: &AgentRequest) -> Result<AgentResponse> {
     let (reader, mut writer) = stream.into_split();
 
     let mut req_json = serde_json::to_string(request)?;
@@ -130,7 +130,7 @@ async fn send_request(stream: UnixStream, request: &DaemonRequest) -> Result<Dae
     writer
         .write_all(req_json.as_bytes())
         .await
-        .map_err(|e| FalconError::Config(format!("failed to send request to daemon: {}", e)))?;
+        .map_err(|e| FalconError::Config(format!("failed to send request to agent: {}", e)))?;
 
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
@@ -140,16 +140,16 @@ async fn send_request(stream: UnixStream, request: &DaemonRequest) -> Result<Dae
         buf_reader.read_line(&mut line),
     )
     .await
-    .map_err(|_| FalconError::Config("daemon request timed out".to_string()))?
-    .map_err(|e| FalconError::Config(format!("failed to read daemon response: {}", e)))?;
+    .map_err(|_| FalconError::Config("agent request timed out".to_string()))?
+    .map_err(|e| FalconError::Config(format!("failed to read agent response: {}", e)))?;
 
     if n == 0 {
         return Err(FalconError::Config(
-            "daemon closed connection without response".to_string(),
+            "agent closed connection without response".to_string(),
         ));
     }
 
-    let response: DaemonResponse = serde_json::from_str(line.trim())?;
+    let response: AgentResponse = serde_json::from_str(line.trim())?;
     Ok(response)
 }
 
@@ -158,6 +158,6 @@ async fn check_running(socket_path: &Path) -> bool {
 }
 
 fn read_pid(socket_path: &Path) -> Option<u32> {
-    let pid_path = crate::daemon::resolve_pid_path(socket_path);
+    let pid_path = crate::agent::resolve_pid_path(socket_path);
     std::fs::read_to_string(&pid_path).ok()?.trim().parse().ok()
 }

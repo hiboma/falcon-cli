@@ -1,15 +1,15 @@
+mod agent;
 mod auth;
 mod cli;
 mod client;
 mod commands;
 mod config;
-mod daemon;
 mod dispatch;
 mod error;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command, DaemonAction};
+use cli::{AgentAction, Cli, Command};
 use config::Config;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,18 +17,18 @@ use std::sync::Arc;
 fn main() {
     let cli = Cli::parse();
 
-    // Handle `daemon start` before tokio runtime is created.
+    // Handle `agent start` before tokio runtime is created.
     // fork() requires a single-threaded process; tokio spawns worker threads.
-    if let Command::Daemon {
+    if let Command::Agent {
         action:
-            DaemonAction::Start {
+            AgentAction::Start {
                 socket,
                 config,
                 foreground,
             },
     } = &cli.command
     {
-        handle_daemon_start(&cli, socket.as_deref(), config.as_deref(), *foreground);
+        handle_agent_start(&cli, socket.as_deref(), config.as_deref(), *foreground);
         return;
     }
 
@@ -38,15 +38,15 @@ fn main() {
 }
 
 async fn async_main(cli: Cli) {
-    // Handle daemon subcommands (stop, status).
-    if let Command::Daemon { action } = &cli.command {
-        handle_daemon_command(action, &cli).await;
+    // Handle agent subcommands (stop, status).
+    if let Command::Agent { action } = &cli.command {
+        handle_agent_command(action, &cli).await;
         return;
     }
 
-    // If FALCON_DAEMON_TOKEN is set, route through the daemon automatically.
+    // If FALCON_AGENT_TOKEN is set, route through the agent automatically.
     if cli.token.is_some() {
-        handle_daemon_client(&cli).await;
+        handle_agent_client(&cli).await;
         return;
     }
 
@@ -55,7 +55,7 @@ async fn async_main(cli: Cli) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {}", e);
-            eprintln!("hint: to use daemon mode: eval \"$(falcon-cli daemon start)\"");
+            eprintln!("hint: to use agent mode: eval \"$(falcon-cli agent start)\"");
             std::process::exit(1);
         }
     };
@@ -92,9 +92,9 @@ fn build_config(cli: &Cli) -> error::Result<Config> {
     Ok(config)
 }
 
-/// Handle `daemon start` before tokio runtime is created.
+/// Handle `agent start` before tokio runtime is created.
 /// This allows fork() to run in a single-threaded process.
-fn handle_daemon_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, foreground: bool) {
+fn handle_agent_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, foreground: bool) {
     let config_obj = match build_config(cli) {
         Ok(c) => c,
         Err(e) => {
@@ -107,40 +107,39 @@ fn handle_daemon_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, fo
     let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
     let falcon = Arc::new(falcon);
 
-    let socket_path = daemon::resolve_socket_path(socket);
+    let socket_path = agent::resolve_socket_path(socket);
     let config_path = config.map(std::path::PathBuf::from);
 
-    if let Err(e) = daemon::server::start(falcon, &socket_path, config_path.as_deref(), foreground)
-    {
+    if let Err(e) = agent::server::start(falcon, &socket_path, config_path.as_deref(), foreground) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
-/// Handle daemon subcommands other than `start` (stop, status).
-async fn handle_daemon_command(action: &DaemonAction, _cli: &Cli) {
+/// Handle agent subcommands other than `start` (stop, status).
+async fn handle_agent_command(action: &AgentAction, _cli: &Cli) {
     match action {
-        DaemonAction::Start { .. } => {
+        AgentAction::Start { .. } => {
             // Handled in main() before tokio runtime.
-            unreachable!("daemon start should be handled before tokio runtime");
+            unreachable!("agent start should be handled before tokio runtime");
         }
-        DaemonAction::Stop { socket, all } => {
+        AgentAction::Stop { socket, all } => {
             if *all {
-                if let Err(e) = daemon::client::stop_all() {
+                if let Err(e) = agent::client::stop_all() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
             } else {
-                let socket_path = daemon::resolve_socket_path(socket.as_deref());
-                if let Err(e) = daemon::client::stop(&socket_path) {
+                let socket_path = agent::resolve_socket_path(socket.as_deref());
+                if let Err(e) = agent::client::stop(&socket_path) {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
             }
         }
-        DaemonAction::Status { socket } => {
-            let socket_path = daemon::resolve_socket_path(socket.as_deref());
-            let status = daemon::client::status(&socket_path).await;
+        AgentAction::Status { socket } => {
+            let socket_path = agent::resolve_socket_path(socket.as_deref());
+            let status = agent::client::status(&socket_path).await;
             let json = serde_json::to_string_pretty(&status)
                 .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
             println!("{}", json);
@@ -148,8 +147,8 @@ async fn handle_daemon_command(action: &DaemonAction, _cli: &Cli) {
     }
 }
 
-async fn handle_daemon_client(cli: &Cli) {
-    let socket_path = daemon::resolve_socket_path(cli.socket.as_deref());
+async fn handle_agent_client(cli: &Cli) {
+    let socket_path = agent::resolve_socket_path(cli.socket.as_deref());
 
     // token is guaranteed to be Some here (checked in async_main).
     let token = cli.token.clone().unwrap();
@@ -163,22 +162,22 @@ async fn handle_daemon_client(cli: &Cli) {
         }
     };
 
-    let result = daemon::client::send_command(&socket_path, token, command, action, args).await;
+    let result = agent::client::send_command(&socket_path, token, command, action, args).await;
 
     match result {
         Ok(value) => {
             output::print_value(&value, &cli.output, cli.pretty);
         }
         Err(e) => {
-            eprintln!("Error (via daemon at {}): {}", socket_path.display(), e);
-            eprintln!("hint: is the daemon running? check with: falcon-cli daemon status");
+            eprintln!("Error (via agent at {}): {}", socket_path.display(), e);
+            eprintln!("hint: is the agent running? check with: falcon-cli agent status");
             std::process::exit(1);
         }
     }
 }
 
 /// Extract command name, action name, and arguments from the parsed Command enum.
-/// This reconstructs what the daemon needs to dispatch the command.
+/// This reconstructs what the agent needs to dispatch the command.
 fn extract_command_args(
     _command: &Command,
 ) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {

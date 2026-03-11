@@ -1,11 +1,11 @@
-use crate::daemon::protocol::{DaemonRequest, DaemonResponse};
-use crate::daemon::security::{AuditLog, CommandWhitelist, RateLimiter};
+use crate::agent::protocol::{AgentRequest, AgentResponse};
+use crate::agent::security::{AuditLog, CommandWhitelist, RateLimiter};
 use crate::dispatch;
 use clap::Parser;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Handles daemon requests by dispatching to the appropriate command.
+/// Handles agent requests by dispatching to the appropriate command.
 pub struct RequestHandler {
     falcon_client: Arc<crate::client::FalconClient>,
     whitelist: Arc<CommandWhitelist>,
@@ -29,7 +29,7 @@ impl RequestHandler {
     }
 
     /// Process a single request and return a response.
-    pub async fn handle(&self, request: DaemonRequest) -> DaemonResponse {
+    pub async fn handle(&self, request: AgentRequest) -> AgentResponse {
         let start = Instant::now();
 
         AuditLog::log_request(&request.command, &request.action, &request.id);
@@ -37,13 +37,13 @@ impl RequestHandler {
         // Verify session token using constant-time comparison to prevent timing attacks.
         if !constant_time_eq(request.token.as_bytes(), self.session_token.as_bytes()) {
             AuditLog::log_denied(&request.id, "invalid_token");
-            return DaemonResponse::error(request.id, "auth", "invalid session token".to_string());
+            return AgentResponse::error(request.id, "auth", "invalid session token".to_string());
         }
 
         // Check rate limit.
         if !self.rate_limiter.try_acquire() {
             AuditLog::log_denied(&request.id, "rate_limited");
-            return DaemonResponse::error(
+            return AgentResponse::error(
                 request.id,
                 "rate_limited",
                 "rate limit exceeded".to_string(),
@@ -53,7 +53,7 @@ impl RequestHandler {
         // Validate command and action names.
         if !is_valid_name(&request.command) || !is_valid_name(&request.action) {
             AuditLog::log_denied(&request.id, "invalid_command_name");
-            return DaemonResponse::error(
+            return AgentResponse::error(
                 request.id,
                 "validation",
                 "invalid command or action name".to_string(),
@@ -63,7 +63,7 @@ impl RequestHandler {
         // Check whitelist.
         if !self.whitelist.is_allowed(&request.command, &request.action) {
             AuditLog::log_denied(&request.id, "command_not_allowed");
-            return DaemonResponse::error(
+            return AgentResponse::error(
                 request.id,
                 "denied",
                 format!(
@@ -81,12 +81,12 @@ impl RequestHandler {
         match result {
             Ok(value) => {
                 AuditLog::log_response(&request.id, "ok", duration);
-                DaemonResponse::ok(request.id, value)
+                AgentResponse::ok(request.id, value)
             }
             Err(e) => {
                 let (kind, message) = classify_error(&e);
                 AuditLog::log_response(&request.id, &kind, duration);
-                DaemonResponse::error(request.id, &kind, message)
+                AgentResponse::error(request.id, &kind, message)
             }
         }
     }
@@ -95,7 +95,7 @@ impl RequestHandler {
     /// and parsing them with clap.
     async fn dispatch_command(
         &self,
-        request: &DaemonRequest,
+        request: &AgentRequest,
     ) -> crate::error::Result<serde_json::Value> {
         // Build a synthetic CLI argument vector from the request.
         let mut args_vec: Vec<String> = vec![
@@ -171,7 +171,7 @@ fn is_valid_name(name: &str) -> bool {
 
 fn classify_error(err: &crate::error::FalconError) -> (String, String) {
     // Log full error details server-side, return generic messages to client.
-    eprintln!("daemon: command error: {}", err);
+    eprintln!("agent: command error: {}", err);
     match err {
         crate::error::FalconError::Auth(_) => {
             ("auth".to_string(), "authentication failed".to_string())

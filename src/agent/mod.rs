@@ -11,19 +11,19 @@ use uuid::Uuid;
 /// Default socket directory name.
 const SOCKET_DIR: &str = "falcon-cli";
 
-/// Resolve the socket path for an existing daemon (from env var or explicit path).
-/// Used by clients connecting to a running daemon.
+/// Resolve the socket path for an existing agent (from env var or explicit path).
+/// Used by clients connecting to a running agent.
 pub fn resolve_socket_path(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
 
-    // Fallback for daemon status/stop without FALCON_DAEMON_SOCKET set.
+    // Fallback for agent status/stop without FALCON_AGENT_SOCKET set.
     resolve_socket_dir().join("falcon.sock")
 }
 
-/// Generate a unique socket path for a new daemon instance.
-/// Includes the daemon PID to avoid collisions when multiple daemons run.
+/// Generate a unique socket path for a new agent instance.
+/// Includes the agent PID to avoid collisions when multiple agents run.
 pub fn generate_socket_path() -> PathBuf {
     let pid = std::process::id();
     resolve_socket_dir().join(format!("falcon-{}.sock", pid))
@@ -40,7 +40,7 @@ fn resolve_socket_dir() -> PathBuf {
     PathBuf::from(format!("/tmp/{}-{}", SOCKET_DIR, uid))
 }
 
-/// Generate a cryptographically random session token for daemon authentication.
+/// Generate a cryptographically random session token for agent authentication.
 pub fn generate_token() -> String {
     // Concatenate two UUIDv4 to get a 256-bit token.
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
@@ -58,8 +58,8 @@ pub fn resolve_pid_path(socket_path: &std::path::Path) -> PathBuf {
         .join(format!("{}.pid", stem.to_string_lossy()))
 }
 
-/// List all running daemon socket paths in the socket directory.
-pub fn list_daemon_sockets() -> Vec<PathBuf> {
+/// List all running agent socket paths in the socket directory.
+pub fn list_agent_sockets() -> Vec<PathBuf> {
     let dir = resolve_socket_dir();
     let mut sockets = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
