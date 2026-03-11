@@ -33,7 +33,7 @@ cargo clippy -- -D warnings
 - `eval "$(falcon-cli agent start)"` forks a background agent (ssh-agent style)
 - `FALCON_AGENT_TOKEN` in env triggers automatic agent routing (no flags needed)
 - Each agent uses a PID-based unique socket path (`falcon-<PID>.sock`)
-- Watchdog monitors parent shell liveness and 8-hour idle timeout
+- Watchdog monitors terminal session liveness (`getsid`) and 8-hour idle timeout
 - `fork()` must happen before tokio runtime creation (see `main.rs`)
 
 ## Code Quality
