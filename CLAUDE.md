@@ -21,10 +21,20 @@ cargo clippy -- -D warnings
 
 ## Environment Variables
 
-- `FALCON_CLIENT_ID` - API client ID (required)
-- `FALCON_CLIENT_SECRET` - API client secret (required)
+- `FALCON_CLIENT_ID` - API client ID (required for direct mode)
+- `FALCON_CLIENT_SECRET` - API client secret (required for direct mode)
 - `FALCON_BASE_URL` - Base URL (default: https://api.crowdstrike.com)
 - `FALCON_MEMBER_CID` - Member CID for MSSP (optional)
+- `FALCON_DAEMON_SOCKET` - Daemon Unix socket path (set by daemon start)
+- `FALCON_DAEMON_TOKEN` - Daemon session token (set by daemon start, triggers auto-detection)
+
+## Daemon Mode
+
+- `eval "$(falcon-cli daemon start)"` forks a background daemon (ssh-agent style)
+- `FALCON_DAEMON_TOKEN` in env triggers automatic daemon routing (no flags needed)
+- Each daemon uses a PID-based unique socket path (`falcon-<PID>.sock`)
+- Watchdog monitors parent shell liveness and 8-hour idle timeout
+- `fork()` must happen before tokio runtime creation (see `main.rs`)
 
 ## Code Quality
 
