@@ -16,7 +16,7 @@
 
 ### 対象ファイル
 
-- 新規: `src/daemon/peer_verify.rs`
+- 新規: `src/agent/peer_verify.rs`
 - 変更: `Cargo.toml`
 
 ### タスク
@@ -43,7 +43,7 @@
 2. Linux 用の `get_peer_exe_path` 関数を実装します
    - `/proc/<PID>/exe` の symlink を `std::fs::read_link` で解決します
 
-3. daemon 自身の実行パスを `std::env::current_exe()` で取得する関数を実装します
+3. agent 自身の実行パスを `std::env::current_exe()` で取得する関数を実装します
 
 ### 依存関係の追加
 
@@ -61,15 +61,15 @@ libproc = "0.14"
 1. macOS 用の `verify_code_signature` 関数を実装します
    - `SecStaticCodeCreateWithPath` でピアの実行パスから Code オブジェクトを作成します
    - `SecStaticCodeCheckValidity` で署名の有効性を検証します
-   - daemon 自身の Code オブジェクトも同様に取得します
+   - agent 自身の Code オブジェクトも同様に取得します
    - 両方の signing identifier を `SecCodeCopySigningInformation` で取得し、一致を確認します
 
 2. 署名なしバイナリの処理を実装します
-   - daemon と client の両方が未署名の場合は検証をスキップし、`true` を返します
+   - agent と client の両方が未署名の場合は検証をスキップし、`true` を返します
    - 片方のみ署名されている場合は `false` を返します
 
 3. Linux 用のフォールバックを実装します
-   - daemon 自身の実行パスとピアの実行パスを比較します
+   - agent 自身の実行パスとピアの実行パスを比較します
    - 一致すれば `true` を返します
 
 ### 依存関係の追加
@@ -84,7 +84,7 @@ core-foundation-sys = "0.8"
 ### 公開 API
 
 ```rust
-// src/daemon/peer_verify.rs
+// src/agent/peer_verify.rs
 
 /// ピアプロセスの検証結果
 pub struct PeerVerification {
@@ -105,8 +105,8 @@ pub fn verify_peer(stream: &tokio::net::UnixStream) -> Result<PeerVerification>;
 
 ### 対象ファイル
 
-- 変更: `src/daemon/server.rs`
-- 変更: `src/daemon/mod.rs`
+- 変更: `src/agent/server.rs`
+- 変更: `src/agent/mod.rs`
 
 ### タスク
 
@@ -118,7 +118,7 @@ pub fn verify_peer(stream: &tokio::net::UnixStream) -> Result<PeerVerification>;
    - ピアの PID、実行パス、署名検証結果を記録します
 
 3. 検証の有効/無効を設定可能にします
-   - `daemon.toml` に `[security] verify_code_signature = true` を追加します
+   - `agent.toml` に `[security] verify_code_signature = true` を追加します
    - デフォルトは `true`（macOS）/ `true`（Linux、パス一致確認のみ）
 
 ---
@@ -138,14 +138,14 @@ pub fn verify_peer(stream: &tokio::net::UnixStream) -> Result<PeerVerification>;
    - テストバイナリは ad-hoc 署名されているため、署名の有無に応じた分岐を確認します
 
 4. 統合テストを追加します
-   - daemon を起動し、同一バイナリからの接続が許可されることを確認します
+   - agent を起動し、同一バイナリからの接続が許可されることを確認します
 
 ---
 
 ## ファイル構成（完成後）
 
 ```
-src/daemon/
+src/agent/
 ├── mod.rs
 ├── protocol.rs
 ├── server.rs         # verify_peer の呼び出しを追加

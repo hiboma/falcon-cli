@@ -1,11 +1,11 @@
-# ADR-0001 実装計画: Daemon モード
+# ADR-0001 実装計画: Agent モード
 
 ## フェーズ概要
 
 | フェーズ | 内容 | 依存 |
 |---------|------|------|
 | 1 | IPC プロトコル定義 | なし |
-| 2 | Daemon サーバー実装 | フェーズ 1 |
+| 2 | Agent サーバー実装 | フェーズ 1 |
 | 3 | Client モード実装 | フェーズ 1 |
 | 4 | セキュリティ強化 | フェーズ 2 |
 | 5 | CLI インターフェース統合 | フェーズ 2, 3 |
@@ -17,8 +17,8 @@
 
 ### 対象ファイル
 
-- 新規: `src/daemon/mod.rs`
-- 新規: `src/daemon/protocol.rs`
+- 新規: `src/agent/mod.rs`
+- 新規: `src/agent/protocol.rs`
 
 ### プロトコル設計
 
@@ -70,19 +70,19 @@ uuid = { version = "1", features = ["v4"] }
 
 ### タスク
 
-1. `DaemonRequest` / `DaemonResponse` の struct を定義します
+1. `AgentRequest` / `AgentResponse` の struct を定義します
 2. シリアライゼーション / デシリアライゼーションを実装します
 3. ソケットパスの決定ロジックを実装します（`$XDG_RUNTIME_DIR` → `/tmp` フォールバック）
 
 ---
 
-## フェーズ 2: Daemon サーバー実装
+## フェーズ 2: Agent サーバー実装
 
 ### 対象ファイル
 
-- 新規: `src/daemon/server.rs`
-- 新規: `src/daemon/handler.rs`
-- 変更: `src/error.rs`（daemon 関連のエラーバリアント追加）
+- 新規: `src/agent/server.rs`
+- 新規: `src/agent/handler.rs`
+- 変更: `src/error.rs`（agent 関連のエラーバリアント追加）
 
 ### タスク
 
@@ -96,7 +96,7 @@ uuid = { version = "1", features = ["v4"] }
 
 ### 設計ポイント
 
-- `FalconClient` と `Auth` のインスタンスは daemon 起動時に1回だけ生成し、全接続で共有します（`Arc`）
+- `FalconClient` と `Auth` のインスタンスは agent 起動時に1回だけ生成し、全接続で共有します（`Arc`）
 - handler は既存の `commands::*::execute()` 関数を直接呼び出し、`serde_json::Value` を受け取って返します
 - コマンド名から `execute` 関数へのマッピングは `main.rs` の既存のマッチを関数として切り出して再利用します
 
@@ -106,14 +106,14 @@ uuid = { version = "1", features = ["v4"] }
 
 ### 対象ファイル
 
-- 新規: `src/daemon/client.rs`
+- 新規: `src/agent/client.rs`
 
 ### タスク
 
 1. `UnixStream` でソケットに接続する client を実装します
-2. CLI 引数を `DaemonRequest` に変換するロジックを実装します
+2. CLI 引数を `AgentRequest` に変換するロジックを実装します
 3. レスポンスを受信し、`serde_json::Value` として返します
-4. 接続エラー時のメッセージ（「daemon が起動していません」等）を実装します
+4. 接続エラー時のメッセージ（「agent が起動していません」等）を実装します
 5. タイムアウト処理を実装します（デフォルト: 30 秒）
 
 ---
@@ -122,14 +122,14 @@ uuid = { version = "1", features = ["v4"] }
 
 ### 対象ファイル
 
-- 新規: `src/daemon/security.rs`
+- 新規: `src/agent/security.rs`
 
 ### タスク
 
 #### 4.1 コマンドホワイトリスト
 
 ```toml
-# ~/.config/falcon-cli/daemon.toml
+# ~/.config/falcon-cli/agent.toml
 [security]
 allowed_commands = [
   "alert:list",
@@ -161,7 +161,7 @@ allowed_commands = [
 #### 4.4 ピア認証
 
 1. `UCred`（Unix Credentials）でクライアントの UID を検証します
-2. daemon の UID と一致しない接続を拒否します
+2. agent の UID と一致しない接続を拒否します
 
 ### 追加依存
 
@@ -180,26 +180,26 @@ toml = "0.8"  # 設定ファイル解析
 
 ### タスク
 
-1. `daemon` サブコマンドを追加します
+1. `agent` サブコマンドを追加します
 
 ```
-falcon-cli daemon start [--socket PATH] [--log-file PATH] [--config PATH]
-falcon-cli daemon stop [--socket PATH]
-falcon-cli daemon status [--socket PATH]
+falcon-cli agent start [--socket PATH] [--log-file PATH] [--config PATH]
+falcon-cli agent stop [--socket PATH]
+falcon-cli agent status [--socket PATH]
 ```
 
-2. `--daemon` グローバルフラグを追加します
+2. `--agent` グローバルフラグを追加します
 
 ```
-falcon-cli --daemon alert list --filter "status:'new'"
+falcon-cli --agent alert list --filter "status:'new'"
 ```
 
 3. `main.rs` のディスパッチロジックを修正します
-   - `--daemon` フラグがある場合: daemon client 経由でコマンドを実行します
-   - `--daemon` フラグがない場合: 従来通り直接 API を呼び出します
-   - `daemon start` コマンドの場合: daemon を起動します
+   - `--agent` フラグがある場合: agent client 経由でコマンドを実行します
+   - `--agent` フラグがない場合: 従来通り直接 API を呼び出します
+   - `agent start` コマンドの場合: agent を起動します
 
-4. 既存のコマンドディスパッチを関数として切り出します（daemon handler と main の両方から利用するため）
+4. 既存のコマンドディスパッチを関数として切り出します（agent handler と main の両方から利用するため）
 
 ---
 
@@ -208,11 +208,11 @@ falcon-cli --daemon alert list --filter "status:'new'"
 ### タスク
 
 1. プロトコルのシリアライゼーション/デシリアライゼーションのユニットテストを追加します
-2. daemon の起動・停止の統合テストを追加します
-3. client から daemon 経由でのコマンド実行の統合テストを追加します
+2. agent の起動・停止の統合テストを追加します
+3. client から agent 経由でのコマンド実行の統合テストを追加します
 4. セキュリティ機能（ホワイトリスト、レートリミット、UID 検証）のテストを追加します
-5. `specs/` に daemon モードの仕様書を追加します
-6. README に daemon モードの使い方を追加します
+5. `specs/` に agent モードの仕様書を追加します
+6. README に agent モードの使い方を追加します
 
 ---
 
@@ -220,14 +220,14 @@ falcon-cli --daemon alert list --filter "status:'new'"
 
 ```
 src/
-├── main.rs              # daemon/client モードの分岐を追加
-├── cli.rs               # --daemon フラグ, daemon サブコマンドを追加
-├── daemon/
-│   ├── mod.rs           # daemon モジュール定義
-│   ├── protocol.rs      # DaemonRequest, DaemonResponse
+├── main.rs              # agent/client モードの分岐を追加
+├── cli.rs               # --agent フラグ, agent サブコマンドを追加
+├── agent/
+│   ├── mod.rs           # agent モジュール定義
+│   ├── protocol.rs      # AgentRequest, AgentResponse
 │   ├── server.rs        # UDS サーバー, 接続管理, シグナルハンドリング
 │   ├── handler.rs       # リクエスト → コマンド実行 → レスポンス
-│   ├── client.rs        # daemon への接続, リクエスト送信
+│   ├── client.rs        # agent への接続, リクエスト送信
 │   └── security.rs      # ホワイトリスト, レートリミット, 監査ログ, UID 検証
 ├── auth.rs
 ├── client.rs
@@ -248,4 +248,4 @@ toml = "0.8"
 
 ## 実装の優先順位
 
-最初の MVP として、フェーズ 1 → 2 → 3 → 5 を実装し、基本的な daemon/client 通信を動作させます。セキュリティ強化（フェーズ 4）とテスト（フェーズ 6）はその後に追加します。
+最初の MVP として、フェーズ 1 → 2 → 3 → 5 を実装し、基本的な agent/client 通信を動作させます。セキュリティ強化（フェーズ 4）とテスト（フェーズ 6）はその後に追加します。
