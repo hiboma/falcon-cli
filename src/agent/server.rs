@@ -92,8 +92,8 @@ pub fn start(
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
             crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
         })?;
-        // SAFETY: getppid() is always safe.
-        let parent_pid = unsafe { libc::getppid() };
+        // SAFETY: getsid(0) is always safe.
+        let session_leader_pid = unsafe { libc::getsid(0) };
         rt.block_on(run_agent(
             falcon_client,
             socket_path,
@@ -101,7 +101,7 @@ pub fn start(
             rate_limiter,
             session_token,
             true,
-            parent_pid,
+            session_leader_pid,
         ))
     } else {
         // Fork into the background (ssh-agent style).
@@ -125,11 +125,12 @@ fn fork_into_background(
     rate_limiter: Arc<RateLimiter>,
     session_token: String,
 ) -> crate::error::Result<()> {
-    // Record the parent PID before fork. After fork, the child's getppid()
-    // returns this process (the CLI), not the shell. We need the shell's PID
-    // to detect when the shell exits.
-    // SAFETY: getppid() is always safe.
-    let shell_pid = unsafe { libc::getppid() };
+    // Record the session leader PID before fork. Using getsid(0) instead of
+    // getppid() so the watchdog monitors the terminal session leader (login
+    // shell), not the immediate parent. This prevents premature shutdown when
+    // launched indirectly (e.g. via Claude Code's temporary shell).
+    // SAFETY: getsid(0) is always safe.
+    let session_leader_pid = unsafe { libc::getsid(0) };
 
     // SAFETY: fork() is safe here because we are single-threaded at this point
     // (tokio runtime has not been created yet).
@@ -161,7 +162,7 @@ fn fork_into_background(
                 rate_limiter,
                 session_token,
                 false,
-                shell_pid,
+                session_leader_pid,
             ))
         }
         child_pid => {
@@ -228,7 +229,7 @@ async fn run_agent(
     rate_limiter: Arc<RateLimiter>,
     session_token: String,
     print_env: bool,
-    parent_pid: libc::pid_t,
+    session_leader_pid: libc::pid_t,
 ) -> crate::error::Result<()> {
     // Bind the Unix listener.
     let listener = UnixListener::bind(socket_path).map_err(|e| {
@@ -284,7 +285,7 @@ async fn run_agent(
 
     eprintln!("agent: listening on {}", socket_path.display());
     eprintln!("agent: PID {}", std::process::id());
-    eprintln!("agent: parent shell PID {}", parent_pid);
+    eprintln!("agent: session leader PID {}", session_leader_pid);
 
     // Accept loop with graceful shutdown on SIGTERM/SIGINT,
     // parent process exit detection, and idle timeout.
@@ -296,7 +297,7 @@ async fn run_agent(
         _ = shutdown_signal() => {
             eprintln!("agent: shutting down (signal)");
         }
-        reason = watchdog(parent_pid, last_activity) => {
+        reason = watchdog(session_leader_pid, last_activity) => {
             eprintln!("agent: shutting down ({})", reason);
         }
     }
@@ -450,20 +451,20 @@ async fn shutdown_signal() {
     }
 }
 
-/// Watchdog task: checks parent process liveness and idle timeout.
+/// Watchdog task: checks session leader liveness and idle timeout.
 /// Returns a reason string when the agent should shut down.
-async fn watchdog(parent_pid: libc::pid_t, last_activity: Arc<AtomicU64>) -> &'static str {
+async fn watchdog(session_leader_pid: libc::pid_t, last_activity: Arc<AtomicU64>) -> &'static str {
     let mut interval =
         tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
 
     loop {
         interval.tick().await;
 
-        // Check if parent shell is still alive.
+        // Check if session leader is still alive.
         // SAFETY: kill(pid, 0) checks process existence without sending a signal.
-        let parent_alive = unsafe { libc::kill(parent_pid, 0) } == 0;
-        if !parent_alive {
-            return "parent shell exited";
+        let session_alive = unsafe { libc::kill(session_leader_pid, 0) } == 0;
+        if !session_alive {
+            return "session leader exited";
         }
 
         // Check idle timeout.
