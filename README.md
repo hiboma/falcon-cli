@@ -12,7 +12,8 @@ Beta - v0.1.0
 - 105 subcommands covering the full CrowdStrike Falcon API
 - JSON output compatible with jq (default)
 - Table output for human-readable display (`--output table`)
-- Cross-platform binaries (Linux, macOS, Windows)
+- Cross-platform binaries (Linux, macOS)
+- Credential agent for API access isolation (ssh-agent model)
 
 ## Installation
 
@@ -52,6 +53,55 @@ Set the following environment variables:
 CLI options (`--client-id`, `--base-url`, `--member-cid`) override environment variables.
 
 > **Note:** `FALCON_CLIENT_SECRET` is only configurable via environment variable or `.env` file to prevent exposure in process lists. Ensure `.env` files have restrictive permissions (`chmod 600 .env`).
+
+## Agent Mode (ssh-agent model)
+
+The credential agent isolates API credentials in a separate process, following the ssh-agent model. This enables LLM agents (e.g., Claude Code) to use falcon-cli without direct access to secrets.
+
+### Start the agent
+
+```bash
+# Start with 1Password secret injection (recommended)
+eval "$(op run --env-file .env.1password -- falcon-cli agent start)"
+
+# Or with environment variables directly
+eval "$(FALCON_CLIENT_ID=xxx FALCON_CLIENT_SECRET=yyy falcon-cli agent start)"
+```
+
+The agent forks into the background and outputs shell variables (`FALCON_AGENT_SOCKET`, `FALCON_AGENT_TOKEN`, `FALCON_AGENT_PID`), just like `ssh-agent`. Each agent instance uses a unique PID-based socket path to avoid collisions.
+
+### Use commands via agent
+
+When `FALCON_AGENT_TOKEN` is set, commands automatically route through the agent:
+
+```bash
+falcon-cli alert list --filter "status:'new'"
+falcon-cli host list --limit 10
+```
+
+### Manage the agent
+
+```bash
+# Check agent status
+falcon-cli agent status
+
+# Stop the current agent
+falcon-cli agent stop
+
+# Stop all running agents
+falcon-cli agent stop --all
+
+# Run in foreground (for debugging)
+falcon-cli agent start --foreground
+```
+
+### Lifecycle
+
+- The agent monitors its parent shell process and shuts down automatically when the shell exits.
+- An idle timeout of 8 hours triggers automatic shutdown if no requests are received.
+- Multiple agent instances can coexist (each uses a unique socket path).
+
+For details, see [ADR-0001: Agent Mode for Credential Isolation](docs/adr/0001-daemon-mode-for-credential-isolation.md).
 
 ## Usage
 
