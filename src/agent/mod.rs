@@ -18,7 +18,13 @@ pub fn resolve_socket_path(explicit: Option<&str>) -> PathBuf {
         return PathBuf::from(p);
     }
 
-    // Fallback for agent status/stop without FALCON_AGENT_SOCKET set.
+    // Fallback: find the first existing socket in the socket directory.
+    let sockets = list_agent_sockets();
+    if sockets.len() == 1 {
+        return sockets.into_iter().next().unwrap();
+    }
+
+    // Multiple or no sockets: fall back to default name.
     resolve_socket_dir().join("falcon.sock")
 }
 
