@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 use crate::commands;
 
@@ -763,7 +764,11 @@ pub enum Command {
         #[command(subcommand)]
         action: commands::faas_execution::Action,
     },
-
+    /// Generate shell completion scripts
+    Completion {
+        /// Target shell
+        shell: Shell,
+    },
     // ── Extended (multi-API) ──
     // Commands below combine multiple Falcon API calls into a single operation.
     // They are falcon-cli specific and do not map 1:1 to a Falcon API endpoint.

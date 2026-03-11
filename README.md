@@ -26,6 +26,12 @@ brew install hiboma/tap/falcon-cli
 
 Download the latest binary from [Releases](https://github.com/hiboma/falcon-cli/releases).
 
+### Cargo with git
+
+```
+cargo install --git https://github.com/hiboma/falcon-cli
+```
+
 ### Build from source
 
 ```
