@@ -36,25 +36,6 @@ pub enum Action {
         #[arg(long)]
         offset: Option<String>,
     },
-    /// Update alert status
-    ///
-    /// Update the status of one or more alerts.
-    ///
-    /// Status values:
-    ///   new, in_progress, reopened, closed
-    Update {
-        /// Alert composite ID(s)
-        #[arg(long, required = true, num_args = 1..)]
-        id: Vec<String>,
-
-        /// New status (new, in_progress, reopened, closed)
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Comment to add to the alert
-        #[arg(long)]
-        comment: Option<String>,
-    },
     /// Close alerts
     ///
     /// Shortcut for `update --status closed`. Closes one or more alerts
@@ -89,6 +70,26 @@ pub enum Action {
         /// Alert composite ID(s) (e.g. "<cid>:automated-lead:<cid>:<lead_id>")
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
+    },
+    /// Update alert status and add comments
+    ///
+    /// Uses PATCH /alerts/entities/alerts/v3 to update alerts.
+    ///
+    /// Examples:
+    ///   alert update --id <composite_id> --status closed --comment "false positive"
+    ///   alert update --id <id1> <id2> --status closed --comment "resolved"
+    Update {
+        /// Alert composite ID(s) to update
+        #[arg(long, required = true, num_args = 1..)]
+        id: Vec<String>,
+
+        /// New status (e.g. "new", "in_progress", "closed")
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Comment to add
+        #[arg(long)]
+        comment: Option<String>,
     },
 }
 

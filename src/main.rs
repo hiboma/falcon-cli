@@ -15,7 +15,12 @@ async fn main() {
     let cli = Cli::parse();
 
     if let Command::Completion { shell } = cli.command {
-        clap_complete::generate(shell, &mut Cli::command(), "falcon-cli", &mut std::io::stdout());
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "falcon-cli",
+            &mut std::io::stdout(),
+        );
         return;
     }
 
