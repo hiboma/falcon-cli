@@ -36,6 +36,19 @@ pub enum Action {
         #[arg(long)]
         offset: Option<String>,
     },
+    /// Close alerts
+    ///
+    /// Shortcut for `update --status closed`. Closes one or more alerts
+    /// and optionally adds a comment.
+    Close {
+        /// Alert composite ID(s)
+        #[arg(long, required = true, num_args = 1..)]
+        id: Vec<String>,
+
+        /// Comment to add to the alert
+        #[arg(long)]
+        comment: Option<String>,
+    },
     /// Get alert details by composite ID
     ///
     /// Composite ID formats:
@@ -58,6 +71,26 @@ pub enum Action {
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
     },
+    /// Update alert status and add comments
+    ///
+    /// Uses PATCH /alerts/entities/alerts/v3 to update alerts.
+    ///
+    /// Examples:
+    ///   alert update --id <composite_id> --status closed --comment "false positive"
+    ///   alert update --id <id1> <id2> --status closed --comment "resolved"
+    Update {
+        /// Alert composite ID(s) to update
+        #[arg(long, required = true, num_args = 1..)]
+        id: Vec<String>,
+
+        /// New status (e.g. "new", "in_progress", "closed")
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Comment to add
+        #[arg(long)]
+        comment: Option<String>,
+    },
 }
 
 pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json::Value> {
@@ -79,5 +112,33 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             let body = serde_json::json!({ "composite_ids": id });
             client.post("/alerts/entities/alerts/v2", &body).await
         }
+        Action::Update {
+            id,
+            status,
+            comment,
+        } => update_alerts(client, &id, status.as_deref(), comment.as_deref()).await,
+        Action::Close { id, comment } => {
+            update_alerts(client, &id, Some("closed"), comment.as_deref()).await
+        }
     }
+}
+
+async fn update_alerts(
+    client: &FalconClient,
+    ids: &[String],
+    status: Option<&str>,
+    comment: Option<&str>,
+) -> Result<serde_json::Value> {
+    let mut action_parameters = Vec::new();
+    if let Some(s) = status {
+        action_parameters.push(serde_json::json!({"name": "update_status", "value": s}));
+    }
+    if let Some(c) = comment {
+        action_parameters.push(serde_json::json!({"name": "append_comment", "value": c}));
+    }
+    let body = serde_json::json!({
+        "composite_ids": ids,
+        "action_parameters": action_parameters,
+    });
+    client.patch("/alerts/entities/alerts/v3", &body).await
 }

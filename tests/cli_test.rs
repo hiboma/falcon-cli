@@ -187,6 +187,32 @@ fn test_all_subcommands_present() {
 }
 
 #[test]
+fn test_alert_help() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "alert", "--help"])
+        .output()
+        .expect("failed to execute");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("list"));
+    assert!(stdout.contains("get"));
+    assert!(stdout.contains("update"));
+}
+
+#[test]
+fn test_alert_update_help() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "alert", "update", "--help"])
+        .output()
+        .expect("failed to execute");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--id"));
+    assert!(stdout.contains("--status"));
+    assert!(stdout.contains("--comment"));
+}
+
+#[test]
 fn test_missing_credentials_error() {
     let output = Command::new("cargo")
         .args(["run", "--", "host", "list"])

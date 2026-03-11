@@ -231,5 +231,9 @@ pub async fn execute(client: &FalconClient, command: Command) -> error::Result<s
         Command::Agent { .. } => Err(crate::error::FalconError::Config(
             "agent command cannot be dispatched".to_string(),
         )),
+        // Completion is handled in main.rs before dispatch.
+        Command::Completion { .. } => Err(crate::error::FalconError::Config(
+            "completion command cannot be dispatched".to_string(),
+        )),
     }
 }

@@ -8,7 +8,7 @@ mod dispatch;
 mod error;
 mod output;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{AgentAction, Cli, Command};
 use config::Config;
 use std::collections::HashMap;
@@ -47,6 +47,17 @@ async fn async_main(cli: Cli) {
     // If FALCON_AGENT_TOKEN is set, route through the agent automatically.
     if cli.token.is_some() {
         handle_agent_client(&cli).await;
+        return;
+    }
+
+    // Handle shell completion generation.
+    if let Command::Completion { shell } = cli.command {
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "falcon-cli",
+            &mut std::io::stdout(),
+        );
         return;
     }
 
