@@ -14,18 +14,38 @@ use config::Config;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let cli = Cli::parse();
 
-    // Handle daemon subcommand.
+    // Handle `daemon start` before tokio runtime is created.
+    // fork() requires a single-threaded process; tokio spawns worker threads.
+    if let Command::Daemon {
+        action:
+            DaemonAction::Start {
+                socket,
+                config,
+                foreground,
+            },
+    } = &cli.command
+    {
+        handle_daemon_start(&cli, socket.as_deref(), config.as_deref(), *foreground);
+        return;
+    }
+
+    // All other paths use the tokio runtime.
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    rt.block_on(async_main(cli));
+}
+
+async fn async_main(cli: Cli) {
+    // Handle daemon subcommands (stop, status).
     if let Command::Daemon { action } = &cli.command {
         handle_daemon_command(action, &cli).await;
         return;
     }
 
-    // If --daemon flag is set, route through the daemon client.
-    if cli.daemon {
+    // If FALCON_DAEMON_TOKEN is set, route through the daemon automatically.
+    if cli.token.is_some() {
         handle_daemon_client(&cli).await;
         return;
     }
@@ -35,6 +55,7 @@ async fn main() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {}", e);
+            eprintln!("hint: to use daemon mode: eval \"$(falcon-cli daemon start)\"");
             std::process::exit(1);
         }
     };
@@ -71,36 +92,50 @@ fn build_config(cli: &Cli) -> error::Result<Config> {
     Ok(config)
 }
 
-async fn handle_daemon_command(action: &DaemonAction, cli: &Cli) {
+/// Handle `daemon start` before tokio runtime is created.
+/// This allows fork() to run in a single-threaded process.
+fn handle_daemon_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, foreground: bool) {
+    let config_obj = match build_config(cli) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let auth = auth::Auth::new(config_obj.clone());
+    let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
+    let falcon = Arc::new(falcon);
+
+    let socket_path = daemon::resolve_socket_path(socket);
+    let config_path = config.map(std::path::PathBuf::from);
+
+    if let Err(e) = daemon::server::start(falcon, &socket_path, config_path.as_deref(), foreground)
+    {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+/// Handle daemon subcommands other than `start` (stop, status).
+async fn handle_daemon_command(action: &DaemonAction, _cli: &Cli) {
     match action {
-        DaemonAction::Start { socket, config } => {
-            let config_obj = match build_config(cli) {
-                Ok(c) => c,
-                Err(e) => {
+        DaemonAction::Start { .. } => {
+            // Handled in main() before tokio runtime.
+            unreachable!("daemon start should be handled before tokio runtime");
+        }
+        DaemonAction::Stop { socket, all } => {
+            if *all {
+                if let Err(e) = daemon::client::stop_all() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
-            };
-
-            let auth = auth::Auth::new(config_obj.clone());
-            let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
-            let falcon = Arc::new(falcon);
-
-            let socket_path = daemon::resolve_socket_path(socket.as_deref());
-            let config_path = config.as_ref().map(std::path::PathBuf::from);
-
-            if let Err(e) =
-                daemon::server::start(falcon, &socket_path, config_path.as_deref()).await
-            {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
-        DaemonAction::Stop { socket } => {
-            let socket_path = daemon::resolve_socket_path(socket.as_deref());
-            if let Err(e) = daemon::client::stop(&socket_path) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
+            } else {
+                let socket_path = daemon::resolve_socket_path(socket.as_deref());
+                if let Err(e) = daemon::client::stop(&socket_path) {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         DaemonAction::Status { socket } => {
@@ -116,14 +151,8 @@ async fn handle_daemon_command(action: &DaemonAction, cli: &Cli) {
 async fn handle_daemon_client(cli: &Cli) {
     let socket_path = daemon::resolve_socket_path(cli.socket.as_deref());
 
-    let token = match &cli.token {
-        Some(t) => t.clone(),
-        None => {
-            eprintln!("Error: FALCON_DAEMON_TOKEN is required when using --daemon");
-            eprintln!("hint: eval \"$(falcon-cli daemon start)\" to set it");
-            std::process::exit(1);
-        }
-    };
+    // token is guaranteed to be Some here (checked in async_main).
+    let token = cli.token.clone().unwrap();
 
     // Extract command and action from CLI args.
     let (command, action, args) = match extract_command_args(&cli.command) {
@@ -141,7 +170,8 @@ async fn handle_daemon_client(cli: &Cli) {
             output::print_value(&value, &cli.output, cli.pretty);
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Error (via daemon at {}): {}", socket_path.display(), e);
+            eprintln!("hint: is the daemon running? check with: falcon-cli daemon status");
             std::process::exit(1);
         }
     }
@@ -166,7 +196,7 @@ fn extract_command_args(
                    // Skip global flags.
     while i < raw_args.len() {
         let arg = &raw_args[i];
-        if arg == "--daemon" || arg == "--pretty" {
+        if arg == "--pretty" {
             i += 1;
             continue;
         }

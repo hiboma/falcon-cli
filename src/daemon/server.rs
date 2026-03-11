@@ -7,17 +7,30 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 /// Maximum size of a single request line (1 MiB).
 const MAX_REQUEST_SIZE: usize = 1024 * 1024;
 
 /// Maximum number of concurrent connections.
 const MAX_CONNECTIONS: usize = 64;
 
+/// Idle timeout: auto-shutdown after 8 hours without requests.
+const IDLE_TIMEOUT_SECS: u64 = 8 * 60 * 60;
+
+/// Interval to check parent process liveness and idle timeout.
+const WATCHDOG_INTERVAL_SECS: u64 = 30;
+
 /// Start the daemon server.
-pub async fn start(
+///
+/// By default, the daemon forks into the background (like ssh-agent).
+/// The parent process outputs shell variables to stdout and exits.
+/// Use `--foreground` to run in the foreground without forking.
+pub fn start(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
     config_path: Option<&Path>,
+    foreground: bool,
 ) -> crate::error::Result<()> {
     // Load security config.
     let security_config = match config_path {
@@ -71,6 +84,152 @@ pub async fn start(
         }
     }
 
+    // Generate session token before fork so the parent can output it.
+    let session_token = crate::daemon::generate_token();
+
+    if foreground {
+        // Run in the foreground (no fork).
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
+        })?;
+        // SAFETY: getppid() is always safe.
+        let parent_pid = unsafe { libc::getppid() };
+        rt.block_on(run_daemon(
+            falcon_client,
+            socket_path,
+            whitelist,
+            rate_limiter,
+            session_token,
+            true,
+            parent_pid,
+        ))
+    } else {
+        // Fork into the background (ssh-agent style).
+        daemonize(
+            falcon_client,
+            socket_path,
+            whitelist,
+            rate_limiter,
+            session_token,
+        )
+    }
+}
+
+/// Fork the daemon process into the background.
+/// The parent outputs SSH Agent-style shell variables and exits.
+/// The child runs the daemon server.
+fn daemonize(
+    falcon_client: Arc<crate::client::FalconClient>,
+    socket_path: &Path,
+    whitelist: Arc<CommandWhitelist>,
+    rate_limiter: Arc<RateLimiter>,
+    session_token: String,
+) -> crate::error::Result<()> {
+    // Record the parent PID before fork. After fork, the child's getppid()
+    // returns this process (the CLI), not the shell. We need the shell's PID
+    // to detect when the shell exits.
+    // SAFETY: getppid() is always safe.
+    let shell_pid = unsafe { libc::getppid() };
+
+    // SAFETY: fork() is safe here because we are single-threaded at this point
+    // (tokio runtime has not been created yet).
+    let pid = unsafe { libc::fork() };
+
+    match pid {
+        -1 => Err(crate::error::FalconError::Config(format!(
+            "fork() failed: {}",
+            std::io::Error::last_os_error()
+        ))),
+        0 => {
+            // Child process: become session leader and run daemon.
+            // SAFETY: setsid() is always safe.
+            unsafe { libc::setsid() };
+
+            // Generate a unique socket path using the daemon PID.
+            let actual_socket_path = crate::daemon::generate_socket_path();
+
+            // Redirect stdin/stdout to /dev/null, stderr to log file.
+            redirect_stdio(&actual_socket_path);
+
+            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
+            })?;
+            rt.block_on(run_daemon(
+                falcon_client,
+                &actual_socket_path,
+                whitelist,
+                rate_limiter,
+                session_token,
+                false,
+                shell_pid,
+            ))
+        }
+        child_pid => {
+            // Parent process: output shell variables and exit.
+            // The actual socket path includes the child PID.
+            let actual_socket_path = socket_path
+                .parent()
+                .unwrap_or(Path::new("/tmp"))
+                .join(format!("falcon-{}.sock", child_pid));
+            println!(
+                "FALCON_DAEMON_SOCKET={}; export FALCON_DAEMON_SOCKET;",
+                actual_socket_path.display()
+            );
+            println!(
+                "FALCON_DAEMON_TOKEN={}; export FALCON_DAEMON_TOKEN;",
+                session_token
+            );
+            println!("FALCON_DAEMON_PID={}; export FALCON_DAEMON_PID;", child_pid);
+            println!("echo daemon started, pid {};", child_pid);
+            Ok(())
+        }
+    }
+}
+
+/// Redirect stdin and stdout to /dev/null, stderr to a log file.
+fn redirect_stdio(socket_path: &Path) {
+    // SAFETY: open, dup2, close are safe POSIX system calls.
+    unsafe {
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if devnull >= 0 {
+            libc::dup2(devnull, libc::STDIN_FILENO);
+            libc::dup2(devnull, libc::STDOUT_FILENO);
+            if devnull > libc::STDERR_FILENO {
+                libc::close(devnull);
+            }
+        }
+
+        // Redirect stderr to a log file next to the socket.
+        let log_path = socket_path
+            .parent()
+            .unwrap_or(Path::new("/tmp"))
+            .join("falcon-cli.log");
+        if let Ok(log_cstr) = std::ffi::CString::new(log_path.to_string_lossy().as_bytes()) {
+            let log_fd = libc::open(
+                log_cstr.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+                0o600,
+            );
+            if log_fd >= 0 {
+                libc::dup2(log_fd, libc::STDERR_FILENO);
+                if log_fd > libc::STDERR_FILENO {
+                    libc::close(log_fd);
+                }
+            }
+        }
+    }
+}
+
+/// Run the daemon server (binds socket, accepts connections, handles shutdown).
+async fn run_daemon(
+    falcon_client: Arc<crate::client::FalconClient>,
+    socket_path: &Path,
+    whitelist: Arc<CommandWhitelist>,
+    rate_limiter: Arc<RateLimiter>,
+    session_token: String,
+    print_env: bool,
+    parent_pid: libc::pid_t,
+) -> crate::error::Result<()> {
     // Bind the Unix listener.
     let listener = UnixListener::bind(socket_path).map_err(|e| {
         crate::error::FalconError::Config(format!(
@@ -100,8 +259,8 @@ pub async fn start(
         crate::error::FalconError::Config(format!("failed to write PID file: {}", e))
     })?;
 
-    // Generate session token.
-    let session_token = crate::daemon::generate_token();
+    // Tracks the epoch second of the last request for idle timeout.
+    let last_activity = Arc::new(AtomicU64::new(epoch_secs()));
 
     let handler = Arc::new(RequestHandler::new(
         falcon_client,
@@ -109,30 +268,36 @@ pub async fn start(
         rate_limiter,
         session_token.clone(),
     ));
-    let start_time = std::time::Instant::now();
 
-    // Output SSH Agent-style shell commands to stdout for `eval`.
-    println!(
-        "FALCON_DAEMON_SOCKET={}; export FALCON_DAEMON_SOCKET;",
-        socket_path.display()
-    );
-    println!(
-        "FALCON_DAEMON_TOKEN={}; export FALCON_DAEMON_TOKEN;",
-        session_token
-    );
-    println!("echo daemon started, pid {};", std::process::id());
+    if print_env {
+        // Foreground mode: output shell variables to stdout.
+        println!(
+            "FALCON_DAEMON_SOCKET={}; export FALCON_DAEMON_SOCKET;",
+            socket_path.display()
+        );
+        println!(
+            "FALCON_DAEMON_TOKEN={}; export FALCON_DAEMON_TOKEN;",
+            session_token
+        );
+        println!("echo daemon started, pid {};", std::process::id());
+    }
 
     eprintln!("daemon: listening on {}", socket_path.display());
     eprintln!("daemon: PID {}", std::process::id());
+    eprintln!("daemon: parent shell PID {}", parent_pid);
 
-    // Accept loop with graceful shutdown on SIGTERM/SIGINT.
+    // Accept loop with graceful shutdown on SIGTERM/SIGINT,
+    // parent process exit detection, and idle timeout.
     let socket_path_owned = socket_path.to_owned();
     let pid_path_owned = pid_path.clone();
 
     tokio::select! {
-        _ = accept_loop(&listener, handler, start_time) => {}
+        _ = accept_loop(&listener, handler, last_activity.clone()) => {}
         _ = shutdown_signal() => {
-            eprintln!("daemon: shutting down");
+            eprintln!("daemon: shutting down (signal)");
+        }
+        reason = watchdog(parent_pid, last_activity) => {
+            eprintln!("daemon: shutting down ({})", reason);
         }
     }
 
@@ -147,7 +312,7 @@ pub async fn start(
 async fn accept_loop(
     listener: &UnixListener,
     handler: Arc<RequestHandler>,
-    _start_time: std::time::Instant,
+    last_activity: Arc<AtomicU64>,
 ) {
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
@@ -184,6 +349,8 @@ async fn accept_loop(
                         continue;
                     }
                 }
+
+                last_activity.store(epoch_secs(), Ordering::Relaxed);
 
                 let handler = handler.clone();
                 let permit = match semaphore.clone().try_acquire_owned() {
@@ -281,6 +448,39 @@ async fn shutdown_signal() {
     {
         ctrl_c.await.ok();
     }
+}
+
+/// Watchdog task: checks parent process liveness and idle timeout.
+/// Returns a reason string when the daemon should shut down.
+async fn watchdog(parent_pid: libc::pid_t, last_activity: Arc<AtomicU64>) -> &'static str {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
+
+    loop {
+        interval.tick().await;
+
+        // Check if parent shell is still alive.
+        // SAFETY: kill(pid, 0) checks process existence without sending a signal.
+        let parent_alive = unsafe { libc::kill(parent_pid, 0) } == 0;
+        if !parent_alive {
+            return "parent shell exited";
+        }
+
+        // Check idle timeout.
+        let last = last_activity.load(Ordering::Relaxed);
+        let now = epoch_secs();
+        if now.saturating_sub(last) >= IDLE_TIMEOUT_SECS {
+            return "idle timeout";
+        }
+    }
+}
+
+/// Get the current time as seconds since UNIX epoch.
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn dirs_config_path() -> std::path::PathBuf {

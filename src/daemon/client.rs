@@ -76,6 +76,37 @@ pub fn stop(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Stop all running daemon instances.
+pub fn stop_all() -> Result<()> {
+    let sockets = crate::daemon::list_daemon_sockets();
+    if sockets.is_empty() {
+        eprintln!("no running daemons found");
+        return Ok(());
+    }
+
+    let mut errors = 0;
+    for socket_path in &sockets {
+        match stop(socket_path) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("failed to stop daemon at {}: {}", socket_path.display(), e);
+                errors += 1;
+            }
+        }
+    }
+
+    if errors > 0 {
+        Err(FalconError::Config(format!(
+            "failed to stop {} of {} daemons",
+            errors,
+            sockets.len()
+        )))
+    } else {
+        eprintln!("stopped {} daemon(s)", sockets.len());
+        Ok(())
+    }
+}
+
 async fn connect(socket_path: &Path) -> Result<UnixStream> {
     let stream = timeout(Duration::from_secs(5), UnixStream::connect(socket_path))
         .await

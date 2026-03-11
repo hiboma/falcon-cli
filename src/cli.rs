@@ -105,12 +105,8 @@ pub struct Cli {
     #[arg(long)]
     pub pretty: bool,
 
-    /// Connect to daemon instead of calling API directly
-    #[arg(long)]
-    pub daemon: bool,
-
     /// Path to the daemon Unix domain socket
-    #[arg(long, env = "FALCON_DAEMON_SOCKET", hide_env = true)]
+    #[arg(long, env = "FALCON_DAEMON_SOCKET", hide_env = true, hide = true)]
     pub socket: Option<String>,
 
     /// Daemon session token (issued at daemon startup)
@@ -808,12 +804,18 @@ pub enum DaemonAction {
         /// Path to the daemon configuration file
         #[arg(long)]
         config: Option<String>,
+        /// Run in the foreground (do not daemonize)
+        #[arg(long)]
+        foreground: bool,
     },
     /// Stop the running daemon
     Stop {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<String>,
+        /// Stop all running daemon instances
+        #[arg(long)]
+        all: bool,
     },
     /// Show daemon status
     Status {
