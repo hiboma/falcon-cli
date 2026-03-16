@@ -71,9 +71,11 @@ pub fn start(
         }
     }
 
-    // Remove stale socket file.
+    // Remove stale socket file (same PID reuse after restart).
     match std::fs::remove_file(socket_path) {
-        Ok(_) => {}
+        Ok(_) => {
+            eprintln!("agent: removed stale socket {}", socket_path.display());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             return Err(crate::error::FalconError::Config(format!(
