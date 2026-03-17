@@ -1,8 +1,28 @@
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 
 use crate::client::FalconClient;
 use crate::commands::build_query_path;
-use crate::error::Result;
+use crate::error::{FalconError, Result};
+
+/// Alert status values for Alerts API v3.
+#[derive(Debug, Clone, ValueEnum)]
+pub enum AlertStatus {
+    New,
+    InProgress,
+    Reopened,
+    Closed,
+}
+
+impl AlertStatus {
+    fn as_api_value(&self) -> &str {
+        match self {
+            Self::New => "new",
+            Self::InProgress => "in_progress",
+            Self::Reopened => "reopened",
+            Self::Closed => "closed",
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Action {
@@ -71,25 +91,59 @@ pub enum Action {
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
     },
-    /// Update alert status and add comments
+    /// Update alert status, tags, assignment, and add comments
     ///
     /// Uses PATCH /alerts/entities/alerts/v3 to update alerts.
     ///
     /// Examples:
     ///   alert update --id <composite_id> --status closed --comment "false positive"
-    ///   alert update --id <id1> <id2> --status closed --comment "resolved"
+    ///   alert update --id <id1> <id2> --status closed
+    ///   alert update --id <composite_id> --add-tag FP --add-tag reviewed
+    ///   alert update --id <composite_id> --remove-tag FP
+    ///   alert update --id <composite_id> --assigned-to-uuid <uuid>
+    ///   alert update --id <composite_id> --assigned-to-user-id user@example.com
+    ///   alert update --id <composite_id> --assigned-to-name "John Doe"
+    ///   alert update --id <composite_id> --unassign
     Update {
         /// Alert composite ID(s) to update
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
 
-        /// New status (e.g. "new", "in_progress", "closed")
+        /// New status
         #[arg(long)]
-        status: Option<String>,
+        status: Option<AlertStatus>,
 
         /// Comment to add
         #[arg(long)]
         comment: Option<String>,
+
+        /// Add tag(s)
+        #[arg(long, num_args = 1..)]
+        add_tag: Vec<String>,
+
+        /// Remove tag(s)
+        #[arg(long, num_args = 1..)]
+        remove_tag: Vec<String>,
+
+        /// Remove tags by prefix
+        #[arg(long)]
+        remove_tags_by_prefix: Option<String>,
+
+        /// Assign to user by UUID
+        #[arg(long, group = "assign")]
+        assigned_to_uuid: Option<String>,
+
+        /// Assign to user by user ID (e.g. email)
+        #[arg(long, group = "assign")]
+        assigned_to_user_id: Option<String>,
+
+        /// Assign to user by name
+        #[arg(long, group = "assign")]
+        assigned_to_name: Option<String>,
+
+        /// Unassign from current user
+        #[arg(long, group = "assign")]
+        unassign: bool,
     },
 }
 
@@ -116,25 +170,109 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             id,
             status,
             comment,
-        } => update_alerts(client, &id, status.as_deref(), comment.as_deref()).await,
+            add_tag,
+            remove_tag,
+            remove_tags_by_prefix,
+            assigned_to_uuid,
+            assigned_to_user_id,
+            assigned_to_name,
+            unassign,
+        } => {
+            update_alerts(
+                client,
+                &id,
+                UpdateParams {
+                    status: status.as_ref(),
+                    comment: comment.as_deref(),
+                    add_tag: &add_tag,
+                    remove_tag: &remove_tag,
+                    remove_tags_by_prefix: remove_tags_by_prefix.as_deref(),
+                    assigned_to_uuid: assigned_to_uuid.as_deref(),
+                    assigned_to_user_id: assigned_to_user_id.as_deref(),
+                    assigned_to_name: assigned_to_name.as_deref(),
+                    unassign,
+                },
+            )
+            .await
+        }
         Action::Close { id, comment } => {
-            update_alerts(client, &id, Some("closed"), comment.as_deref()).await
+            update_alerts(
+                client,
+                &id,
+                UpdateParams {
+                    status: Some(&AlertStatus::Closed),
+                    comment: comment.as_deref(),
+                    ..Default::default()
+                },
+            )
+            .await
         }
     }
+}
+
+#[derive(Default)]
+struct UpdateParams<'a> {
+    status: Option<&'a AlertStatus>,
+    comment: Option<&'a str>,
+    add_tag: &'a [String],
+    remove_tag: &'a [String],
+    remove_tags_by_prefix: Option<&'a str>,
+    assigned_to_uuid: Option<&'a str>,
+    assigned_to_user_id: Option<&'a str>,
+    assigned_to_name: Option<&'a str>,
+    unassign: bool,
 }
 
 async fn update_alerts(
     client: &FalconClient,
     ids: &[String],
-    status: Option<&str>,
-    comment: Option<&str>,
+    params: UpdateParams<'_>,
 ) -> Result<serde_json::Value> {
-    let mut action_parameters = Vec::new();
-    if let Some(s) = status {
-        action_parameters.push(serde_json::json!({"name": "update_status", "value": s}));
+    let has_action = params.status.is_some()
+        || params.comment.is_some()
+        || !params.add_tag.is_empty()
+        || !params.remove_tag.is_empty()
+        || params.remove_tags_by_prefix.is_some()
+        || params.assigned_to_uuid.is_some()
+        || params.assigned_to_user_id.is_some()
+        || params.assigned_to_name.is_some()
+        || params.unassign;
+    if !has_action {
+        return Err(FalconError::Api(
+            "at least one update option is required (e.g. --status, --comment, --add-tag)"
+                .to_string(),
+        ));
     }
-    if let Some(c) = comment {
+
+    let mut action_parameters = Vec::new();
+    if let Some(s) = params.status {
+        action_parameters
+            .push(serde_json::json!({"name": "update_status", "value": s.as_api_value()}));
+    }
+    if let Some(c) = params.comment {
         action_parameters.push(serde_json::json!({"name": "append_comment", "value": c}));
+    }
+    for tag in params.add_tag {
+        action_parameters.push(serde_json::json!({"name": "add_tag", "value": tag}));
+    }
+    for tag in params.remove_tag {
+        action_parameters.push(serde_json::json!({"name": "remove_tag", "value": tag}));
+    }
+    if let Some(prefix) = params.remove_tags_by_prefix {
+        action_parameters
+            .push(serde_json::json!({"name": "remove_tags_by_prefix", "value": prefix}));
+    }
+    if let Some(uuid) = params.assigned_to_uuid {
+        action_parameters.push(serde_json::json!({"name": "assign_to_uuid", "value": uuid}));
+    }
+    if let Some(user_id) = params.assigned_to_user_id {
+        action_parameters.push(serde_json::json!({"name": "assign_to_user_id", "value": user_id}));
+    }
+    if let Some(name) = params.assigned_to_name {
+        action_parameters.push(serde_json::json!({"name": "assign_to_name", "value": name}));
+    }
+    if params.unassign {
+        action_parameters.push(serde_json::json!({"name": "unassign", "value": ""}));
     }
     let body = serde_json::json!({
         "composite_ids": ids,
