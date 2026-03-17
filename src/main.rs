@@ -118,7 +118,10 @@ fn handle_agent_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, for
     let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
     let falcon = Arc::new(falcon);
 
-    let socket_path = agent::resolve_socket_path(socket);
+    let socket_path = match socket {
+        Some(p) => std::path::PathBuf::from(p),
+        None => agent::generate_socket_path(),
+    };
     let config_path = config.map(std::path::PathBuf::from);
 
     if let Err(e) = agent::server::start(falcon, &socket_path, config_path.as_deref(), foreground) {
