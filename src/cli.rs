@@ -114,6 +114,10 @@ pub struct Cli {
     #[arg(long, env = "FALCON_AGENT_TOKEN", hide_env = true, hide = true)]
     pub token: Option<String>,
 
+    /// Skip agent auto-detection and use direct API mode
+    #[arg(long)]
+    pub no_agent: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -812,6 +816,9 @@ pub enum AgentAction {
         /// Run in the foreground (do not fork into background)
         #[arg(long)]
         foreground: bool,
+        /// Share the agent across terminals via session file (no eval needed)
+        #[arg(long)]
+        shared: bool,
     },
     /// Stop the running agent
     Stop {
