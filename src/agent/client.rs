@@ -72,6 +72,9 @@ pub fn stop(socket_path: &Path) -> Result<()> {
         }
     }
 
+    // Clean up session file if it references this agent.
+    cleanup_session_file(socket_path);
+
     eprintln!("sent SIGTERM to agent (PID {})", pid);
     Ok(())
 }
@@ -102,8 +105,20 @@ pub fn stop_all() -> Result<()> {
             sockets.len()
         )))
     } else {
+        // Clean up session file when stopping all agents.
+        crate::agent::session::remove_session();
         eprintln!("stopped {} agent(s)", sockets.len());
         Ok(())
+    }
+}
+
+/// Remove session file if it references the given socket path.
+fn cleanup_session_file(socket_path: &Path) {
+    if let Some(session) = crate::agent::session::read_session() {
+        if session.socket_path == socket_path.display().to_string() {
+            crate::agent::session::remove_session();
+            eprintln!("removed session file");
+        }
     }
 }
 

@@ -25,10 +25,17 @@ fn main() {
                 socket,
                 config,
                 foreground,
+                shared,
             },
     } = &cli.command
     {
-        handle_agent_start(&cli, socket.as_deref(), config.as_deref(), *foreground);
+        handle_agent_start(
+            &cli,
+            socket.as_deref(),
+            config.as_deref(),
+            *foreground,
+            *shared,
+        );
         return;
     }
 
@@ -45,9 +52,19 @@ async fn async_main(cli: Cli) {
     }
 
     // If FALCON_AGENT_TOKEN is set, route through the agent automatically.
-    if cli.token.is_some() {
+    if !cli.no_agent && cli.token.is_some() {
         handle_agent_client(&cli).await;
         return;
+    }
+
+    // If no explicit token but a session file exists, use it for auto-detection.
+    if !cli.no_agent && cli.token.is_none() {
+        if let Some(session) = agent::session::read_session() {
+            if agent::session::is_session_alive(&session) {
+                handle_agent_client_from_session(&cli, session).await;
+                return;
+            }
+        }
     }
 
     // Handle shell completion generation.
@@ -105,7 +122,13 @@ fn build_config(cli: &Cli) -> error::Result<Config> {
 
 /// Handle `agent start` before tokio runtime is created.
 /// This allows fork() to run in a single-threaded process.
-fn handle_agent_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, foreground: bool) {
+fn handle_agent_start(
+    cli: &Cli,
+    socket: Option<&str>,
+    config: Option<&str>,
+    foreground: bool,
+    shared: bool,
+) {
     let config_obj = match build_config(cli) {
         Ok(c) => c,
         Err(e) => {
@@ -124,7 +147,13 @@ fn handle_agent_start(cli: &Cli, socket: Option<&str>, config: Option<&str>, for
     };
     let config_path = config.map(std::path::PathBuf::from);
 
-    if let Err(e) = agent::server::start(falcon, &socket_path, config_path.as_deref(), foreground) {
+    if let Err(e) = agent::server::start(
+        falcon,
+        &socket_path,
+        config_path.as_deref(),
+        foreground,
+        shared,
+    ) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -190,6 +219,32 @@ async fn handle_agent_client(cli: &Cli) {
     }
 }
 
+async fn handle_agent_client_from_session(cli: &Cli, session: agent::session::SessionInfo) {
+    let socket_path = std::path::PathBuf::from(&session.socket_path);
+    let token = session.token;
+
+    let (command, action, args) = match extract_command_args(&cli.command) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let result = agent::client::send_command(&socket_path, token, command, action, args).await;
+
+    match result {
+        Ok(value) => {
+            output::print_value(&value, &cli.output, cli.pretty);
+        }
+        Err(e) => {
+            eprintln!("Error (via agent at {}): {}", socket_path.display(), e);
+            eprintln!("hint: is the agent running? check with: falcon-cli agent status");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Extract command name, action name, and arguments from the parsed Command enum.
 /// This reconstructs what the agent needs to dispatch the command.
 fn extract_command_args(
@@ -209,7 +264,7 @@ fn extract_command_args(
                    // Skip global flags.
     while i < raw_args.len() {
         let arg = &raw_args[i];
-        if arg == "--pretty" {
+        if arg == "--pretty" || arg == "--no-agent" {
             i += 1;
             continue;
         }
