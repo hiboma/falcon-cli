@@ -36,6 +36,14 @@ cargo clippy -- -D warnings
 - Watchdog monitors terminal session liveness (`getsid`) and 8-hour idle timeout
 - `fork()` must happen before tokio runtime creation (see `main.rs`)
 
+### Shared Mode
+
+- `falcon-cli agent start --shared` writes session info to `~/.local/share/falcon-cli/session.json`
+- No `eval` needed; any terminal can auto-detect the agent via session file
+- Session leader monitoring is disabled; idle timeout (8h) still applies
+- `--no-agent` flag forces direct API mode, skipping agent auto-detection
+- Priority: `--no-agent` > `FALCON_AGENT_TOKEN` env > session.json > direct mode
+
 ## Code Quality
 
 - `cargo fmt --check` and `cargo clippy -- -D warnings` must pass
