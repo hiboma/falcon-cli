@@ -344,13 +344,19 @@ pub enum Command {
 
     // ── Container & Kubernetes ──
     /// Manage container alerts
-    #[command(next_help_heading = "Container & Kubernetes", alias = "container-alerts")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "container-alerts"
+    )]
     ContainerAlert {
         #[command(subcommand)]
         action: commands::container_alerts::Action,
     },
     /// Manage container detections
-    #[command(next_help_heading = "Container & Kubernetes", alias = "container-detections")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "container-detections"
+    )]
     ContainerDetection {
         #[command(subcommand)]
         action: commands::container_detections::Action,
@@ -362,19 +368,28 @@ pub enum Command {
         action: commands::container_image_compliance::Action,
     },
     /// Manage container images
-    #[command(next_help_heading = "Container & Kubernetes", alias = "container-images")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "container-images"
+    )]
     ContainerImage {
         #[command(subcommand)]
         action: commands::container_images::Action,
     },
     /// Manage container packages
-    #[command(next_help_heading = "Container & Kubernetes", alias = "container-packages")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "container-packages"
+    )]
     ContainerPackage {
         #[command(subcommand)]
         action: commands::container_packages::Action,
     },
     /// Manage container vulnerabilities
-    #[command(next_help_heading = "Container & Kubernetes", alias = "container-vulns")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "container-vulns"
+    )]
     ContainerVuln {
         #[command(subcommand)]
         action: commands::container_vulnerabilities::Action,
@@ -398,7 +413,10 @@ pub enum Command {
         action: commands::kubernetes_container_compliance::Action,
     },
     /// Manage unidentified containers
-    #[command(next_help_heading = "Container & Kubernetes", alias = "unidentified-containers")]
+    #[command(
+        next_help_heading = "Container & Kubernetes",
+        alias = "unidentified-containers"
+    )]
     UnidentifiedContainer {
         #[command(subcommand)]
         action: commands::unidentified_containers::Action,
@@ -412,7 +430,10 @@ pub enum Command {
 
     // ── Vulnerability Management ──
     /// Manage Spotlight vulnerabilities
-    #[command(next_help_heading = "Vulnerability Management", alias = "spotlight-vulns")]
+    #[command(
+        next_help_heading = "Vulnerability Management",
+        alias = "spotlight-vulns"
+    )]
     SpotlightVuln {
         #[command(subcommand)]
         action: commands::spotlight_vulnerabilities::Action,
@@ -430,7 +451,10 @@ pub enum Command {
         action: commands::spotlight_vulnerability_metadata::Action,
     },
     /// Manage serverless vulnerabilities
-    #[command(next_help_heading = "Vulnerability Management", alias = "serverless-vulns")]
+    #[command(
+        next_help_heading = "Vulnerability Management",
+        alias = "serverless-vulns"
+    )]
     ServerlessVuln {
         #[command(subcommand)]
         action: commands::serverless_vulnerabilities::Action,
@@ -714,7 +738,10 @@ pub enum Command {
         action: commands::cao_hunting::Action,
     },
     /// Manage correlation rules
-    #[command(next_help_heading = "Platform & Integration", alias = "correlation-rules")]
+    #[command(
+        next_help_heading = "Platform & Integration",
+        alias = "correlation-rules"
+    )]
     CorrelationRule {
         #[command(subcommand)]
         action: commands::correlation_rules::Action,
@@ -732,7 +759,10 @@ pub enum Command {
         action: commands::custom_storage::Action,
     },
     /// Manage delivery settings
-    #[command(next_help_heading = "Platform & Integration", alias = "delivery-settings")]
+    #[command(
+        next_help_heading = "Platform & Integration",
+        alias = "delivery-settings"
+    )]
     DeliverySetting {
         #[command(subcommand)]
         action: commands::delivery_settings::Action,
