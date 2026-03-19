@@ -91,6 +91,10 @@ pub fn start(
     let session_token = crate::agent::generate_token();
 
     if foreground {
+        // Sanitize environment and harden process before starting.
+        crate::agent::sanitize_env();
+        crate::agent::harden_process();
+
         // Run in the foreground (no fork).
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
             crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
@@ -151,6 +155,11 @@ fn fork_into_background(
             // Child process: become session leader and run agent.
             // SAFETY: setsid() is always safe.
             unsafe { libc::setsid() };
+
+            // Sanitize environment and harden process immediately after fork,
+            // before tokio runtime creation. See ADR-0004.
+            crate::agent::sanitize_env();
+            crate::agent::harden_process();
 
             // Generate a unique socket path using the agent PID.
             let actual_socket_path = crate::agent::generate_socket_path();
