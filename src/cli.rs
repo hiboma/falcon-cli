@@ -126,19 +126,19 @@ pub struct Cli {
 pub enum Command {
     // ── Detection & Response ──
     /// Manage alerts
-    #[command(next_help_heading = "Detection & Response")]
+    #[command(next_help_heading = "Detection & Response", alias = "alerts")]
     Alert {
         #[command(subcommand)]
         action: commands::alerts::Action,
     },
     /// Manage detections
-    #[command(next_help_heading = "Detection & Response")]
+    #[command(next_help_heading = "Detection & Response", alias = "detections")]
     Detection {
         #[command(subcommand)]
         action: commands::detects::Action,
     },
     /// Manage incidents
-    #[command(next_help_heading = "Detection & Response")]
+    #[command(next_help_heading = "Detection & Response", alias = "incidents")]
     Incident {
         #[command(subcommand)]
         action: commands::incidents::Action,
@@ -194,19 +194,19 @@ pub enum Command {
 
     // ── Host Management ──
     /// Manage hosts
-    #[command(next_help_heading = "Host Management")]
+    #[command(next_help_heading = "Host Management", alias = "hosts")]
     Host {
         #[command(subcommand)]
         action: commands::hosts::Action,
     },
     /// Manage host groups
-    #[command(next_help_heading = "Host Management")]
+    #[command(next_help_heading = "Host Management", alias = "host-groups")]
     HostGroup {
         #[command(subcommand)]
         action: commands::host_group::Action,
     },
     /// Manage host migrations
-    #[command(next_help_heading = "Host Management")]
+    #[command(next_help_heading = "Host Management", alias = "host-migrations")]
     HostMigration {
         #[command(subcommand)]
         action: commands::host_migration::Action,
@@ -306,7 +306,7 @@ pub enum Command {
         action: commands::cloud_security::Action,
     },
     /// Manage cloud security assets
-    #[command(next_help_heading = "Cloud Security")]
+    #[command(next_help_heading = "Cloud Security", alias = "cloud-assets")]
     CloudAsset {
         #[command(subcommand)]
         action: commands::cloud_security_assets::Action,
@@ -318,13 +318,13 @@ pub enum Command {
         action: commands::cloud_security_compliance::Action,
     },
     /// Manage cloud security detections
-    #[command(next_help_heading = "Cloud Security")]
+    #[command(next_help_heading = "Cloud Security", alias = "cloud-detections")]
     CloudDetection {
         #[command(subcommand)]
         action: commands::cloud_security_detections::Action,
     },
     /// Manage cloud snapshots
-    #[command(next_help_heading = "Cloud Security")]
+    #[command(next_help_heading = "Cloud Security", alias = "cloud-snapshots")]
     CloudSnapshot {
         #[command(subcommand)]
         action: commands::cloud_snapshots::Action,
@@ -344,13 +344,13 @@ pub enum Command {
 
     // ── Container & Kubernetes ──
     /// Manage container alerts
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "container-alerts")]
     ContainerAlert {
         #[command(subcommand)]
         action: commands::container_alerts::Action,
     },
     /// Manage container detections
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "container-detections")]
     ContainerDetection {
         #[command(subcommand)]
         action: commands::container_detections::Action,
@@ -362,19 +362,19 @@ pub enum Command {
         action: commands::container_image_compliance::Action,
     },
     /// Manage container images
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "container-images")]
     ContainerImage {
         #[command(subcommand)]
         action: commands::container_images::Action,
     },
     /// Manage container packages
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "container-packages")]
     ContainerPackage {
         #[command(subcommand)]
         action: commands::container_packages::Action,
     },
     /// Manage container vulnerabilities
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "container-vulns")]
     ContainerVuln {
         #[command(subcommand)]
         action: commands::container_vulnerabilities::Action,
@@ -398,7 +398,7 @@ pub enum Command {
         action: commands::kubernetes_container_compliance::Action,
     },
     /// Manage unidentified containers
-    #[command(next_help_heading = "Container & Kubernetes")]
+    #[command(next_help_heading = "Container & Kubernetes", alias = "unidentified-containers")]
     UnidentifiedContainer {
         #[command(subcommand)]
         action: commands::unidentified_containers::Action,
@@ -412,7 +412,7 @@ pub enum Command {
 
     // ── Vulnerability Management ──
     /// Manage Spotlight vulnerabilities
-    #[command(next_help_heading = "Vulnerability Management")]
+    #[command(next_help_heading = "Vulnerability Management", alias = "spotlight-vulns")]
     SpotlightVuln {
         #[command(subcommand)]
         action: commands::spotlight_vulnerabilities::Action,
@@ -430,7 +430,7 @@ pub enum Command {
         action: commands::spotlight_vulnerability_metadata::Action,
     },
     /// Manage serverless vulnerabilities
-    #[command(next_help_heading = "Vulnerability Management")]
+    #[command(next_help_heading = "Vulnerability Management", alias = "serverless-vulns")]
     ServerlessVuln {
         #[command(subcommand)]
         action: commands::serverless_vulnerabilities::Action,
@@ -456,7 +456,7 @@ pub enum Command {
 
     // ── Exclusions & IOC ──
     /// Manage IOA exclusions
-    #[command(next_help_heading = "Exclusions & IOC")]
+    #[command(next_help_heading = "Exclusions & IOC", alias = "ioa-exclusions")]
     IoaExclusion {
         #[command(subcommand)]
         action: commands::ioa_exclusions::Action,
@@ -474,19 +474,19 @@ pub enum Command {
         action: commands::iocs::Action,
     },
     /// Manage ML exclusions
-    #[command(next_help_heading = "Exclusions & IOC")]
+    #[command(next_help_heading = "Exclusions & IOC", alias = "ml-exclusions")]
     MlExclusion {
         #[command(subcommand)]
         action: commands::ml_exclusions::Action,
     },
     /// Manage sensor visibility exclusions
-    #[command(next_help_heading = "Exclusions & IOC")]
+    #[command(next_help_heading = "Exclusions & IOC", alias = "sv-exclusions")]
     SvExclusion {
         #[command(subcommand)]
         action: commands::sensor_visibility_exclusions::Action,
     },
     /// Manage certificate-based exclusions
-    #[command(next_help_heading = "Exclusions & IOC")]
+    #[command(next_help_heading = "Exclusions & IOC", alias = "cert-exclusions")]
     CertExclusion {
         #[command(subcommand)]
         action: commands::certificate_based_exclusions::Action,
@@ -550,19 +550,19 @@ pub enum Command {
         action: commands::sensor_usage::Action,
     },
     /// Manage installation tokens
-    #[command(next_help_heading = "Sensor & Downloads")]
+    #[command(next_help_heading = "Sensor & Downloads", alias = "install-tokens")]
     InstallToken {
         #[command(subcommand)]
         action: commands::installation_tokens::Action,
     },
     /// Manage downloads
-    #[command(next_help_heading = "Sensor & Downloads")]
+    #[command(next_help_heading = "Sensor & Downloads", alias = "downloads")]
     Download {
         #[command(subcommand)]
         action: commands::downloads::Action,
     },
     /// Manage deployments
-    #[command(next_help_heading = "Sensor & Downloads")]
+    #[command(next_help_heading = "Sensor & Downloads", alias = "deployments")]
     Deployment {
         #[command(subcommand)]
         action: commands::deployments::Action,
@@ -614,7 +614,7 @@ pub enum Command {
         action: commands::identity_protection::Action,
     },
     /// Manage users
-    #[command(next_help_heading = "Identity & Access")]
+    #[command(next_help_heading = "Identity & Access", alias = "users")]
     User {
         #[command(subcommand)]
         action: commands::user_management::Action,
@@ -646,13 +646,13 @@ pub enum Command {
 
     // ── Monitoring & Reporting ──
     /// Manage event streams
-    #[command(next_help_heading = "Monitoring & Reporting")]
+    #[command(next_help_heading = "Monitoring & Reporting", alias = "event-streams")]
     EventStream {
         #[command(subcommand)]
         action: commands::event_streams::Action,
     },
     /// Manage message center
-    #[command(next_help_heading = "Monitoring & Reporting")]
+    #[command(next_help_heading = "Monitoring & Reporting", alias = "messages")]
     Message {
         #[command(subcommand)]
         action: commands::message_center::Action,
@@ -670,7 +670,7 @@ pub enum Command {
         action: commands::scheduled_reports::Action,
     },
     /// Manage cases
-    #[command(next_help_heading = "Monitoring & Reporting")]
+    #[command(next_help_heading = "Monitoring & Reporting", alias = "cases")]
     Case {
         #[command(subcommand)]
         action: commands::case_management::Action,
@@ -682,7 +682,7 @@ pub enum Command {
         action: commands::falcon_complete_dashboard::Action,
     },
     /// Manage workflows
-    #[command(next_help_heading = "Monitoring & Reporting")]
+    #[command(next_help_heading = "Monitoring & Reporting", alias = "workflows")]
     Workflow {
         #[command(subcommand)]
         action: commands::workflows::Action,
@@ -714,7 +714,7 @@ pub enum Command {
         action: commands::cao_hunting::Action,
     },
     /// Manage correlation rules
-    #[command(next_help_heading = "Platform & Integration")]
+    #[command(next_help_heading = "Platform & Integration", alias = "correlation-rules")]
     CorrelationRule {
         #[command(subcommand)]
         action: commands::correlation_rules::Action,
@@ -732,7 +732,7 @@ pub enum Command {
         action: commands::custom_storage::Action,
     },
     /// Manage delivery settings
-    #[command(next_help_heading = "Platform & Integration")]
+    #[command(next_help_heading = "Platform & Integration", alias = "delivery-settings")]
     DeliverySetting {
         #[command(subcommand)]
         action: commands::delivery_settings::Action,
@@ -762,7 +762,7 @@ pub enum Command {
         action: commands::ngsiem::Action,
     },
     /// Manage sample uploads
-    #[command(next_help_heading = "Platform & Integration")]
+    #[command(next_help_heading = "Platform & Integration", alias = "samples")]
     Sample {
         #[command(subcommand)]
         action: commands::sample_uploads::Action,
