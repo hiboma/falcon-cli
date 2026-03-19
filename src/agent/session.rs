@@ -11,22 +11,31 @@ pub struct SessionInfo {
     pub started_at: DateTime<Utc>,
 }
 
+/// Return the session file name based on build profile.
+/// Debug builds use `session.debug.json` to avoid conflicts with release builds.
+fn session_file_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        "session.debug.json"
+    } else {
+        "session.json"
+    }
+}
+
 /// Resolve the session file path.
-/// Uses `$XDG_DATA_HOME/falcon-cli/session.json` (default: `~/.local/share/falcon-cli/session.json`).
+/// Uses `$XDG_DATA_HOME/falcon-cli/<session_file>` (default: `~/.local/share/falcon-cli/<session_file>`).
 pub fn session_file_path() -> PathBuf {
+    let file_name = session_file_name();
     if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-        return PathBuf::from(data_home)
-            .join("falcon-cli")
-            .join("session.json");
+        return PathBuf::from(data_home).join("falcon-cli").join(file_name);
     }
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home)
             .join(".local")
             .join("share")
             .join("falcon-cli")
-            .join("session.json");
+            .join(file_name);
     }
-    PathBuf::from("/tmp/falcon-cli-session.json")
+    PathBuf::from(format!("/tmp/falcon-cli-{file_name}"))
 }
 
 /// Write session info to disk with restricted permissions (0600).
@@ -96,8 +105,9 @@ mod tests {
 
     #[test]
     fn test_session_file_path_default() {
+        // Tests run as debug builds, so the file name should be session.debug.json.
         let path = session_file_path();
-        assert_eq!(path.file_name().unwrap(), "session.json");
+        assert_eq!(path.file_name().unwrap(), "session.debug.json");
         assert!(path.to_string_lossy().contains("falcon-cli"));
     }
 
