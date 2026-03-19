@@ -37,14 +37,19 @@ pub fn generate_socket_path() -> PathBuf {
 }
 
 /// Resolve the socket directory.
+///
+/// Priority:
+/// 1. `$XDG_RUNTIME_DIR/falcon-cli` (Linux systemd: `/run/user/<uid>/falcon-cli`)
+/// 2. `std::env::temp_dir()/falcon-cli` (macOS: `/var/folders/.../T/falcon-cli`, Linux: `/tmp/falcon-cli`)
+///
+/// On macOS, `std::env::temp_dir()` returns a user-specific directory under
+/// `/var/folders/` with 0700 permissions, which is more secure than `/tmp`.
 fn resolve_socket_dir() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir).join(SOCKET_DIR);
     }
 
-    // SAFETY: getuid() is always safe with no side effects.
-    let uid = unsafe { libc::getuid() };
-    PathBuf::from(format!("/tmp/{}-{}", SOCKET_DIR, uid))
+    std::env::temp_dir().join(SOCKET_DIR)
 }
 
 /// Generate a cryptographically random session token for agent authentication.
@@ -124,7 +129,7 @@ pub fn sanitize_env() {
         }
     }
 
-    if count > 0 {
+    if count > 0 && is_debug() {
         eprintln!("agent: sanitized environment ({} variables removed)", count);
     }
 }
@@ -163,7 +168,7 @@ fn harden_process_os() {
             "agent: prctl(PR_SET_DUMPABLE, 0) failed: {}",
             std::io::Error::last_os_error()
         );
-    } else {
+    } else if is_debug() {
         eprintln!("agent: process hardened (PR_SET_DUMPABLE=0)");
     }
 }
@@ -177,7 +182,7 @@ fn harden_process_os() {
             "agent: ptrace(PT_DENY_ATTACH) failed: {}",
             std::io::Error::last_os_error()
         );
-    } else {
+    } else if is_debug() {
         eprintln!("agent: process hardened (PT_DENY_ATTACH)");
     }
 }
@@ -199,9 +204,17 @@ fn disable_core_dump() {
             "agent: setrlimit(RLIMIT_CORE, 0) failed: {}",
             std::io::Error::last_os_error()
         );
-    } else {
+    } else if is_debug() {
         eprintln!("agent: core dumps disabled");
     }
+}
+
+/// Check if debug logging is enabled via RUST_LOG environment variable.
+/// This must be called before sanitize_env() clears the environment,
+/// or use the cached result.
+fn is_debug() -> bool {
+    // RUST_LOG is in the whitelist, so it survives sanitize_env().
+    std::env::var("RUST_LOG").is_ok()
 }
 
 #[cfg(test)]
