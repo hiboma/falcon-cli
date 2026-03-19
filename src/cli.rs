@@ -864,5 +864,8 @@ pub enum AgentAction {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<String>,
+        /// Show status from shared session file instead of socket
+        #[arg(long)]
+        shared: bool,
     },
 }

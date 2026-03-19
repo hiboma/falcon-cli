@@ -215,9 +215,10 @@ fn test_alert_update_help() {
 #[test]
 fn test_missing_credentials_error() {
     let output = Command::new("cargo")
-        .args(["run", "--", "host", "list"])
+        .args(["run", "--", "--no-agent", "host", "list"])
         .env_remove("FALCON_CLIENT_ID")
         .env_remove("FALCON_CLIENT_SECRET")
+        .env_remove("FALCON_AGENT_TOKEN")
         .output()
         .expect("failed to execute");
 

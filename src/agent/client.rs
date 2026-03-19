@@ -49,6 +49,35 @@ pub async fn status(socket_path: &Path) -> AgentStatus {
         pid,
         socket_path: socket_path.display().to_string(),
         uptime_seconds: None,
+        shared: false,
+        session_file: None,
+    }
+}
+
+/// Check the status of the shared agent via session.json.
+pub async fn status_shared() -> AgentStatus {
+    let session_path = crate::agent::session::session_file_path();
+    match crate::agent::session::read_session() {
+        Some(session) => {
+            let socket_path = std::path::PathBuf::from(&session.socket_path);
+            let running = check_running(&socket_path).await;
+            AgentStatus {
+                running,
+                pid: Some(session.pid),
+                socket_path: session.socket_path,
+                uptime_seconds: None,
+                shared: true,
+                session_file: Some(session_path.display().to_string()),
+            }
+        }
+        None => AgentStatus {
+            running: false,
+            pid: None,
+            socket_path: String::new(),
+            uptime_seconds: None,
+            shared: true,
+            session_file: Some(session_path.display().to_string()),
+        },
     }
 }
 

@@ -180,9 +180,13 @@ async fn handle_agent_command(action: &AgentAction, _cli: &Cli) {
                 }
             }
         }
-        AgentAction::Status { socket } => {
-            let socket_path = agent::resolve_socket_path(socket.as_deref());
-            let status = agent::client::status(&socket_path).await;
+        AgentAction::Status { socket, shared } => {
+            let status = if *shared {
+                agent::client::status_shared().await
+            } else {
+                let socket_path = agent::resolve_socket_path(socket.as_deref());
+                agent::client::status(&socket_path).await
+            };
             let json = serde_json::to_string_pretty(&status)
                 .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
             println!("{}", json);
