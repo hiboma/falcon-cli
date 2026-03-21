@@ -7,19 +7,40 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 /// Maximum size of a single request line (1 MiB).
 const MAX_REQUEST_SIZE: usize = 1024 * 1024;
 
 /// Maximum number of concurrent connections.
 const MAX_CONNECTIONS: usize = 64;
 
-/// Idle timeout: auto-shutdown after 8 hours without requests.
-const IDLE_TIMEOUT_SECS: u64 = 8 * 60 * 60;
-
-/// Interval to check parent process liveness and idle timeout.
+/// Interval to check session leader liveness.
 const WATCHDOG_INTERVAL_SECS: u64 = 30;
+
+/// Check if an agent is already running.
+/// Returns the PID of the running agent if found.
+fn check_already_running(shared: bool) -> Option<u32> {
+    // Build a temporary tokio runtime for the async socket check.
+    let rt = tokio::runtime::Runtime::new().ok()?;
+
+    if shared {
+        // Shared mode: check session.json for an existing agent.
+        let session = crate::agent::session::read_session()?;
+        let socket_path = std::path::PathBuf::from(&session.socket_path);
+        if rt.block_on(crate::agent::client::check_running(&socket_path)) {
+            return Some(session.pid);
+        }
+    } else {
+        // Eval mode: check all existing sockets in the socket directory.
+        for socket_path in crate::agent::list_agent_sockets() {
+            if rt.block_on(crate::agent::client::check_running(&socket_path)) {
+                let pid = crate::agent::client::read_pid(&socket_path);
+                return pid;
+            }
+        }
+    }
+
+    None
+}
 
 /// Start the agent server.
 ///
@@ -33,6 +54,12 @@ pub fn start(
     foreground: bool,
     shared: bool,
 ) -> crate::error::Result<()> {
+    // Check if an agent is already running.
+    if let Some(pid) = check_already_running(shared) {
+        eprintln!("agent: already started (pid {})", pid);
+        return Ok(());
+    }
+
     // Load security config.
     let security_config = match config_path {
         Some(p) => SecurityConfig::load(p),
@@ -289,9 +316,6 @@ async fn run_agent(
         crate::error::FalconError::Config(format!("failed to write PID file: {}", e))
     })?;
 
-    // Tracks the epoch second of the last request for idle timeout.
-    let last_activity = Arc::new(AtomicU64::new(epoch_secs()));
-
     let handler = Arc::new(RequestHandler::new(
         falcon_client,
         whitelist,
@@ -338,29 +362,26 @@ async fn run_agent(
         eprintln!("agent: session leader PID {}", session_leader_pid);
     }
 
-    // Accept loop with graceful shutdown on SIGTERM/SIGINT,
-    // parent process exit detection, and idle timeout.
+    // Accept loop with graceful shutdown on SIGTERM/SIGINT
+    // and session leader exit detection (eval mode only).
     let socket_path_owned = socket_path.to_owned();
     let pid_path_owned = pid_path.clone();
 
     if shared {
-        // Shared mode: no session leader monitoring, idle timeout only.
+        // Shared mode: no session leader monitoring, signal-only shutdown.
         tokio::select! {
-            _ = accept_loop(&listener, handler, last_activity.clone()) => {}
+            _ = accept_loop(&listener, handler) => {}
             _ = shutdown_signal() => {
                 eprintln!("agent: shutting down (signal)");
-            }
-            reason = watchdog_idle_only(last_activity) => {
-                eprintln!("agent: shutting down ({})", reason);
             }
         }
     } else {
         tokio::select! {
-            _ = accept_loop(&listener, handler, last_activity.clone()) => {}
+            _ = accept_loop(&listener, handler) => {}
             _ = shutdown_signal() => {
                 eprintln!("agent: shutting down (signal)");
             }
-            reason = watchdog(session_leader_pid, last_activity) => {
+            reason = watchdog(session_leader_pid) => {
                 eprintln!("agent: shutting down ({})", reason);
             }
         }
@@ -378,11 +399,7 @@ async fn run_agent(
     Ok(())
 }
 
-async fn accept_loop(
-    listener: &UnixListener,
-    handler: Arc<RequestHandler>,
-    last_activity: Arc<AtomicU64>,
-) {
+async fn accept_loop(listener: &UnixListener, handler: Arc<RequestHandler>) {
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
     loop {
@@ -418,8 +435,6 @@ async fn accept_loop(
                         continue;
                     }
                 }
-
-                last_activity.store(epoch_secs(), Ordering::Relaxed);
 
                 let handler = handler.clone();
                 let permit = match semaphore.clone().try_acquire_owned() {
@@ -519,9 +534,9 @@ async fn shutdown_signal() {
     }
 }
 
-/// Watchdog task: checks session leader liveness and idle timeout.
+/// Watchdog task: checks session leader liveness.
 /// Returns a reason string when the agent should shut down.
-async fn watchdog(session_leader_pid: libc::pid_t, last_activity: Arc<AtomicU64>) -> &'static str {
+async fn watchdog(session_leader_pid: libc::pid_t) -> &'static str {
     let mut interval =
         tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
 
@@ -534,38 +549,7 @@ async fn watchdog(session_leader_pid: libc::pid_t, last_activity: Arc<AtomicU64>
         if !session_alive {
             return "session leader exited";
         }
-
-        // Check idle timeout.
-        let last = last_activity.load(Ordering::Relaxed);
-        let now = epoch_secs();
-        if now.saturating_sub(last) >= IDLE_TIMEOUT_SECS {
-            return "idle timeout";
-        }
     }
-}
-
-/// Watchdog task for shared mode: idle timeout only, no session leader monitoring.
-async fn watchdog_idle_only(last_activity: Arc<AtomicU64>) -> &'static str {
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
-
-    loop {
-        interval.tick().await;
-
-        let last = last_activity.load(Ordering::Relaxed);
-        let now = epoch_secs();
-        if now.saturating_sub(last) >= IDLE_TIMEOUT_SECS {
-            return "idle timeout";
-        }
-    }
-}
-
-/// Get the current time as seconds since UNIX epoch.
-fn epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 fn dirs_config_path() -> std::path::PathBuf {
