@@ -33,14 +33,15 @@ cargo clippy -- -D warnings
 - `eval "$(falcon-cli agent start)"` forks a background agent (ssh-agent style)
 - `FALCON_AGENT_TOKEN` in env triggers automatic agent routing (no flags needed)
 - Each agent uses a PID-based unique socket path (`falcon-<PID>.sock`)
-- Watchdog monitors terminal session liveness (`getsid`) and 8-hour idle timeout
+- Watchdog monitors terminal session liveness (`getsid`); no idle timeout
+- Duplicate start is detected via socket connection check ("already started")
 - `fork()` must happen before tokio runtime creation (see `main.rs`)
 
 ### Shared Mode
 
 - `falcon-cli agent start --shared` writes session info to `~/.local/share/falcon-cli/session.json`
 - No `eval` needed; any terminal can auto-detect the agent via session file
-- Session leader monitoring is disabled; idle timeout (8h) still applies
+- Session leader monitoring is disabled; shutdown via signal only
 - `--no-agent` flag forces direct API mode, skipping agent auto-detection
 - Priority: `--no-agent` > `FALCON_AGENT_TOKEN` env > session.json > direct mode
 
