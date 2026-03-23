@@ -68,6 +68,9 @@ Platform & Integration:
 
 Agent:
   agent
+
+Configuration:
+  profile
 ";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -117,6 +120,10 @@ pub struct Cli {
     /// Skip agent auto-detection and use direct API mode
     #[arg(long)]
     pub no_agent: bool,
+
+    /// Profile name to filter available commands (overrides FALCON_PROFILE)
+    #[arg(long, env = "FALCON_PROFILE", hide_env = true)]
+    pub profile: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -830,6 +837,27 @@ pub enum Command {
         #[command(subcommand)]
         action: AgentAction,
     },
+
+    // ── Profile ──
+    /// Manage command profiles
+    #[command(next_help_heading = "Configuration")]
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+}
+
+/// Profile subcommand actions.
+#[derive(Subcommand, Debug)]
+pub enum ProfileAction {
+    /// Initialize a profile configuration file with recommended profiles
+    Init {
+        /// Write to ~/.config/falcon-cli/config.toml instead of ./.falcon-cli.toml
+        #[arg(long)]
+        global: bool,
+    },
+    /// List available profiles and show the active one
+    List,
 }
 
 /// Agent subcommand actions (ssh-agent style credential agent).

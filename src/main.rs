@@ -7,14 +7,21 @@ mod config;
 mod dispatch;
 mod error;
 mod output;
+mod profile;
 
 use clap::{CommandFactory, Parser};
-use cli::{AgentAction, Cli, Command};
+use cli::{AgentAction, Cli, Command, ProfileAction};
 use config::Config;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 fn main() {
+    // If top-level --help is requested, show profile-aware help and exit.
+    if should_show_profile_help() {
+        show_profile_help();
+        return;
+    }
+
     let cli = Cli::parse();
 
     // Handle `agent start` before tokio runtime is created.
@@ -45,6 +52,12 @@ fn main() {
 }
 
 async fn async_main(cli: Cli) {
+    // Handle profile subcommands.
+    if let Command::Profile { action } = &cli.command {
+        handle_profile_command(action, cli.profile.as_deref());
+        return;
+    }
+
     // Handle agent subcommands (stop, status).
     if let Command::Agent { action } = &cli.command {
         handle_agent_command(action, &cli).await;
@@ -76,6 +89,21 @@ async fn async_main(cli: Cli) {
             &mut std::io::stdout(),
         );
         return;
+    }
+
+    // Check profile restrictions before dispatching.
+    if let Some(ref active_profile) = profile::resolve(cli.profile.as_deref()) {
+        let cmd_name = command_name_from(&cli.command);
+        if !active_profile.is_command_allowed(&cmd_name) {
+            eprintln!(
+                "Error: command '{}' is not allowed by profile '{}'",
+                cmd_name, active_profile.name
+            );
+            eprintln!(
+                "hint: use --profile to switch profiles, or run 'falcon-cli profile list' to see available profiles"
+            );
+            std::process::exit(1);
+        }
     }
 
     // Direct mode: call API directly.
@@ -118,6 +146,325 @@ fn build_config(cli: &Cli) -> error::Result<Config> {
     }
 
     Ok(config)
+}
+
+/// Check if top-level --help/-h is requested (not for a subcommand).
+fn should_show_profile_help() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    // Only intercept if -h/--help appears at top level (no subcommand before it).
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-h" || arg == "--help" {
+            return true;
+        }
+        // If we hit a non-flag argument, it's a subcommand — don't intercept.
+        if !arg.starts_with('-') {
+            return false;
+        }
+        // Skip flags with values.
+        if matches!(
+            arg.as_str(),
+            "--client-id"
+                | "--base-url"
+                | "--member-cid"
+                | "--output"
+                | "--socket"
+                | "--token"
+                | "--profile"
+        ) {
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Show profile-aware help text.
+fn show_profile_help() {
+    // Extract --profile value from args.
+    let args: Vec<String> = std::env::args().collect();
+    let mut cli_profile = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--profile" {
+            if i + 1 < args.len() {
+                cli_profile = Some(args[i + 1].clone());
+            }
+            break;
+        }
+        if args[i].starts_with("--profile=") {
+            cli_profile = Some(args[i].trim_start_matches("--profile=").to_string());
+            break;
+        }
+        i += 1;
+    }
+
+    let active = profile::resolve(cli_profile.as_deref());
+
+    match active {
+        Some(ref ap) if !ap.commands.iter().any(|c| c == "*") => {
+            print_filtered_help(ap);
+        }
+        _ => {
+            // No profile or wildcard: show default help.
+            let mut cmd = Cli::command();
+            let help = cmd.render_help();
+            print!("{}", help);
+        }
+    }
+}
+
+/// Print help text filtered by the active profile.
+fn print_filtered_help(ap: &profile::ActiveProfile) {
+    let version = env!("CARGO_PKG_VERSION");
+    let total = total_command_count();
+    let allowed = ap.commands.len();
+
+    println!("A CLI tool for CrowdStrike Falcon API");
+    println!();
+    println!("Usage: falcon-cli [OPTIONS] <COMMAND>");
+    println!();
+
+    // Options section — use clap to render them.
+    let cmd = Cli::command();
+    println!("Options:");
+    for arg in cmd.get_arguments() {
+        if arg.is_hide_set() {
+            continue;
+        }
+        let long = arg
+            .get_long()
+            .map(|l| format!("--{}", l))
+            .unwrap_or_default();
+        let short = arg
+            .get_short()
+            .map(|s| format!("-{}, ", s))
+            .unwrap_or_else(|| "    ".to_string());
+        let is_bool = arg.get_action().takes_values();
+        let value_name = if !is_bool {
+            String::new()
+        } else {
+            arg.get_value_names()
+                .map(|v| {
+                    v.iter()
+                        .map(|n| format!("<{}>", n))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default()
+        };
+        let help = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
+        if long.is_empty() && value_name.is_empty() {
+            continue;
+        }
+        let flag = if value_name.is_empty() {
+            format!("  {}{}", short, long)
+        } else {
+            format!("  {}{} {}", short, long, value_name)
+        };
+        println!("{:<40} {}", flag, help);
+    }
+    println!();
+
+    // Commands section — group by category, only showing allowed commands.
+    let categories: &[(&str, &[&str])] = &[
+        (
+            "Detection & Response",
+            &[
+                "alert",
+                "detection",
+                "incident",
+                "rtr",
+                "rtr-admin",
+                "rtr-audit",
+                "recon",
+                "overwatch",
+                "sandbox",
+                "quarantine",
+                "drift",
+            ],
+        ),
+        (
+            "Host Management",
+            &[
+                "host",
+                "host-group",
+                "host-migration",
+                "discover",
+                "device-content",
+                "device-control-policy",
+            ],
+        ),
+        (
+            "Policy Management",
+            &[
+                "prevention-policy",
+                "response-policy",
+                "sensor-update-policy",
+                "content-update-policy",
+                "firewall-policy",
+            ],
+        ),
+        (
+            "Cloud Security",
+            &[
+                "cloud-aws",
+                "cloud-azure",
+                "cloud-connect-aws",
+                "cloud-gcp",
+                "cloud-oci",
+                "cloud-policy",
+                "cloud-security",
+                "cloud-asset",
+                "cloud-compliance",
+                "cloud-detection",
+                "cloud-snapshot",
+                "cspm",
+                "d4c",
+            ],
+        ),
+        (
+            "Container & Kubernetes",
+            &[
+                "container-alert",
+                "container-detection",
+                "container-compliance",
+                "container-image",
+                "container-package",
+                "container-vuln",
+                "falcon-container",
+                "k8s",
+                "k8s-compliance",
+                "unidentified-container",
+                "image-policy",
+            ],
+        ),
+        (
+            "Vulnerability Management",
+            &[
+                "spotlight-vuln",
+                "spotlight-eval",
+                "spotlight-metadata",
+                "serverless-vuln",
+                "exposure",
+                "config-assessment",
+                "config-eval",
+            ],
+        ),
+        (
+            "Exclusions & IOC",
+            &[
+                "ioa-exclusion",
+                "ioc",
+                "iocs",
+                "ml-exclusion",
+                "sv-exclusion",
+                "cert-exclusion",
+                "custom-ioa",
+            ],
+        ),
+        (
+            "Threat Intelligence",
+            &[
+                "intel",
+                "intel-feed",
+                "intel-graph",
+                "tailored-intel",
+                "threatgraph",
+                "malquery",
+            ],
+        ),
+        (
+            "Sensor & Downloads",
+            &[
+                "sensor-download",
+                "sensor-usage",
+                "install-token",
+                "download",
+                "deployment",
+            ],
+        ),
+        (
+            "Scanning & Compliance",
+            &[
+                "quick-scan",
+                "quick-scan-pro",
+                "ods",
+                "filevantage",
+                "datascanner",
+                "data-protection",
+            ],
+        ),
+        (
+            "Identity & Access",
+            &["identity", "user", "oauth2", "zero-trust", "mobile", "mssp"],
+        ),
+        (
+            "Monitoring & Reporting",
+            &[
+                "event-stream",
+                "message",
+                "report-execution",
+                "scheduled-report",
+                "case",
+                "falcon-complete",
+                "workflow",
+                "it-automation",
+            ],
+        ),
+        (
+            "Platform & Integration",
+            &[
+                "api-integration",
+                "aspm",
+                "cao-hunting",
+                "correlation-rule",
+                "correlation-admin",
+                "custom-storage",
+                "delivery-setting",
+                "fdr",
+                "firewall",
+                "logscale",
+                "ngsiem",
+                "sample",
+                "saas-security",
+                "faas",
+            ],
+        ),
+    ];
+
+    println!("Commands:");
+    for (category, cmds) in categories {
+        let filtered: Vec<&&str> = cmds.iter().filter(|c| ap.is_command_allowed(c)).collect();
+        if filtered.is_empty() {
+            continue;
+        }
+        println!();
+        println!("{}:", category);
+        let line = filtered
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  {}", line);
+    }
+
+    // Always show agent, profile, completion.
+    println!();
+    println!("Agent:");
+    println!("  agent");
+    println!();
+    println!("Configuration:");
+    println!("  profile");
+
+    println!();
+    println!(
+        "Active profile: {} ({}/{} commands)",
+        ap.name, allowed, total,
+    );
+    println!("Version: {}", version);
 }
 
 /// Handle `agent start` before tokio runtime is created.
@@ -249,6 +596,110 @@ async fn handle_agent_client_from_session(cli: &Cli, session: agent::session::Se
     }
 }
 
+/// Handle `profile init` and `profile list` subcommands.
+fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
+    match action {
+        ProfileAction::Init { global } => {
+            let path = if *global {
+                let home = std::env::var("HOME").unwrap_or_else(|_| {
+                    eprintln!("Error: HOME is not set");
+                    std::process::exit(1);
+                });
+                let dir = std::path::PathBuf::from(home).join(".config/falcon-cli");
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("Error: failed to create {}: {}", dir.display(), e);
+                    std::process::exit(1);
+                }
+                dir.join("config.toml")
+            } else {
+                std::path::PathBuf::from(".falcon-cli.toml")
+            };
+
+            if path.exists() {
+                eprintln!("Error: {} already exists", path.display());
+                eprintln!("hint: remove or rename the file to re-initialize");
+                std::process::exit(1);
+            }
+
+            if let Err(e) = std::fs::write(&path, profile::builtin_config_toml()) {
+                eprintln!("Error: failed to write {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+            println!("Created {}", path.display());
+        }
+        ProfileAction::List => {
+            let config = profile::load_config();
+            let active = profile::resolve(cli_profile);
+
+            match config {
+                Some(config) if !config.profiles.is_empty() => {
+                    let active_name = active.as_ref().map(|a| a.name.as_str());
+                    for (name, p) in &config.profiles {
+                        let marker = if Some(name.as_str()) == active_name {
+                            " (active)"
+                        } else {
+                            ""
+                        };
+                        let cmd_count = if p.commands.iter().any(|c| c == "*") {
+                            "all".to_string()
+                        } else {
+                            format!("{} commands", p.commands.len())
+                        };
+                        println!("  {}{} - {} [{}]", name, marker, p.description, cmd_count);
+                    }
+                    if let Some(ref ap) = active {
+                        let total = total_command_count();
+                        let allowed = if ap.commands.iter().any(|c| c == "*") {
+                            total
+                        } else {
+                            ap.commands.len()
+                        };
+                        println!(
+                            "\nActive profile: {} - {} ({}/{} commands)",
+                            ap.name, ap.description, allowed, total,
+                        );
+                    }
+                }
+                _ => {
+                    println!("No profiles configured.");
+                    println!("hint: run 'falcon-cli profile init' to create a configuration file");
+                }
+            }
+        }
+    }
+}
+
+/// Get the total number of API commands (excluding agent, profile, completion).
+fn total_command_count() -> usize {
+    let cmd = Cli::command();
+    cmd.get_subcommands()
+        .filter(|s| {
+            let name = s.get_name();
+            name != "agent" && name != "profile" && name != "completion"
+        })
+        .count()
+}
+
+/// Extract the kebab-case command name from a parsed Command variant.
+fn command_name_from(command: &Command) -> String {
+    // Use the Debug representation to get the variant name, then convert to kebab-case.
+    let debug = format!("{:?}", command);
+    let variant = debug.split([' ', '{', '(']).next().unwrap_or("");
+    to_kebab_case(variant)
+}
+
+/// Convert PascalCase to kebab-case (e.g., "CloudAws" → "cloud-aws").
+fn to_kebab_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('-');
+        }
+        result.push(c.to_ascii_lowercase());
+    }
+    result
+}
+
 /// Extract command name, action name, and arguments from the parsed Command enum.
 /// This reconstructs what the agent needs to dispatch the command.
 fn extract_command_args(
@@ -278,6 +729,7 @@ fn extract_command_args(
             || arg == "--output"
             || arg == "--socket"
             || arg == "--token"
+            || arg == "--profile"
         {
             i += 2; // skip flag and its value
             continue;
@@ -294,6 +746,7 @@ fn extract_command_args(
                         | "--output"
                         | "--socket"
                         | "--token"
+                        | "--profile"
                 ) {
                     i += 1;
                     continue;

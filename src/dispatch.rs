@@ -235,5 +235,9 @@ pub async fn execute(client: &FalconClient, command: Command) -> error::Result<s
         Command::Completion { .. } => Err(crate::error::FalconError::Config(
             "completion command cannot be dispatched".to_string(),
         )),
+        // Profile subcommand is handled in main.rs before dispatch.
+        Command::Profile { .. } => Err(crate::error::FalconError::Config(
+            "profile command cannot be dispatched".to_string(),
+        )),
     }
 }
