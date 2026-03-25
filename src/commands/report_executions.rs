@@ -1,9 +1,9 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::Subcommand;
-use std::io::Write;
 
 use crate::client::FalconClient;
 use crate::commands::build_query_path;
-use crate::error::{FalconError, Result};
+use crate::error::Result;
 
 #[derive(Subcommand, Debug)]
 pub enum Action {
@@ -75,23 +75,14 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
         Action::Download { id, output } => {
             let path = format!("/reports/entities/report-executions-download/v1?ids={}", id);
             let data = client.get_bytes(&path).await?;
+            let encoded = STANDARD.encode(&data);
 
-            match output {
-                Some(file_path) => {
-                    std::fs::write(&file_path, &data).map_err(|e| {
-                        FalconError::Api(format!("failed to write {}: {}", file_path, e))
-                    })?;
-                    eprintln!("Downloaded {} bytes to {}", data.len(), file_path);
-                }
-                None => {
-                    let mut stdout = std::io::stdout().lock();
-                    stdout
-                        .write_all(&data)
-                        .map_err(|e| FalconError::Api(format!("failed to write stdout: {}", e)))?;
-                }
-            }
-
-            Ok(serde_json::json!({"status": "downloaded", "bytes": data.len()}))
+            Ok(serde_json::json!({
+                "_binary": true,
+                "data": encoded,
+                "bytes": data.len(),
+                "output": output,
+            }))
         }
     }
 }

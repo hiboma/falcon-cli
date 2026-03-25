@@ -9,10 +9,12 @@ mod error;
 mod output;
 mod profile;
 
+use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{CommandFactory, Parser};
 use cli::{AgentAction, Cli, Command, ProfileAction};
 use config::FalconCredentials;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 fn main() {
@@ -128,7 +130,11 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
 
     match result {
         Ok(value) => {
-            output::print_value(&value, &cli.output, cli.pretty);
+            if is_binary_response(&value) {
+                write_binary_response(&value);
+            } else {
+                output::print_value(&value, &cli.output, cli.pretty);
+            }
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -557,7 +563,11 @@ async fn handle_agent_client(cli: &Cli) {
 
     match result {
         Ok(value) => {
-            output::print_value(&value, &cli.output, cli.pretty);
+            if is_binary_response(&value) {
+                write_binary_response(&value);
+            } else {
+                output::print_value(&value, &cli.output, cli.pretty);
+            }
         }
         Err(e) => {
             eprintln!("Error (via agent at {}): {}", socket_path.display(), e);
@@ -583,7 +593,11 @@ async fn handle_agent_client_from_session(cli: &Cli, session: agent::session::Se
 
     match result {
         Ok(value) => {
-            output::print_value(&value, &cli.output, cli.pretty);
+            if is_binary_response(&value) {
+                write_binary_response(&value);
+            } else {
+                output::print_value(&value, &cli.output, cli.pretty);
+            }
         }
         Err(e) => {
             eprintln!("Error (via agent at {}): {}", socket_path.display(), e);
@@ -820,5 +834,48 @@ fn insert_arg(args: &mut HashMap<String, serde_json::Value>, key: String, value:
         }
     } else {
         args.insert(key, serde_json::Value::String(value));
+    }
+}
+
+/// Check if a response contains binary data encoded as base64.
+fn is_binary_response(value: &serde_json::Value) -> bool {
+    value.get("_binary").and_then(|v| v.as_bool()) == Some(true)
+}
+
+/// Decode base64 binary data from a response and write to file or stdout.
+fn write_binary_response(value: &serde_json::Value) {
+    let encoded = match value.get("data").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: binary response missing data field");
+            std::process::exit(1);
+        }
+    };
+
+    let data = match STANDARD.decode(encoded) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to decode binary data: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let output_path = value.get("output").and_then(|v| v.as_str());
+
+    match output_path {
+        Some(file_path) => {
+            if let Err(e) = std::fs::write(file_path, &data) {
+                eprintln!("Error: failed to write {}: {}", file_path, e);
+                std::process::exit(1);
+            }
+            eprintln!("Downloaded {} bytes to {}", data.len(), file_path);
+        }
+        None => {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(e) = stdout.write_all(&data) {
+                eprintln!("Error: failed to write stdout: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 }
