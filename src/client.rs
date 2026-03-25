@@ -92,6 +92,22 @@ impl FalconClient {
         Self::handle_response(resp).await
     }
 
+    /// Send a GET request and return raw bytes with automatic re-authentication on 401.
+    pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.auth.get_token().await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            self.auth.invalidate().await;
+            let new_token = self.auth.refresh_token().await?;
+            let retry_resp = self.http.get(&url).bearer_auth(&new_token).send().await?;
+            return Self::handle_bytes_response(retry_resp).await;
+        }
+
+        Self::handle_bytes_response(resp).await
+    }
+
     /// Send a DELETE request with automatic re-authentication on 401.
     #[allow(dead_code)]
     pub async fn delete(&self, path: &str) -> Result<serde_json::Value> {
@@ -126,5 +142,19 @@ impl FalconClient {
 
         let value: serde_json::Value = serde_json::from_str(&body)?;
         Ok(value)
+    }
+
+    async fn handle_bytes_response(resp: reqwest::Response) -> Result<Vec<u8>> {
+        let status = resp.status();
+
+        if !status.is_success() {
+            let body = resp.text().await?;
+            let mut truncated = body;
+            truncated.truncate(200);
+            return Err(FalconError::Api(format!("{}: {}", status, truncated)));
+        }
+
+        let bytes = resp.bytes().await?;
+        Ok(bytes.to_vec())
     }
 }
