@@ -11,7 +11,7 @@ mod profile;
 
 use clap::{CommandFactory, Parser};
 use cli::{AgentAction, Cli, Command, ProfileAction};
-use config::Config;
+use config::FalconCredentials;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,6 +24,13 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Resolve credentials early (before fork).
+    let credentials = FalconCredentials::resolve(
+        cli.client_id.as_deref(),
+        cli.base_url.as_deref(),
+        cli.member_cid.as_deref(),
+    );
+
     // Handle `agent start` before tokio runtime is created.
     // fork() requires a single-threaded process; tokio spawns worker threads.
     if let Command::Agent {
@@ -32,26 +39,24 @@ fn main() {
                 socket,
                 config,
                 foreground,
-                shared,
             },
     } = &cli.command
     {
         handle_agent_start(
-            &cli,
             socket.as_deref(),
             config.as_deref(),
             *foreground,
-            *shared,
+            credentials,
         );
         return;
     }
 
     // All other paths use the tokio runtime.
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    rt.block_on(async_main(cli));
+    rt.block_on(async_main(cli, credentials));
 }
 
-async fn async_main(cli: Cli) {
+async fn async_main(cli: Cli, credentials: FalconCredentials) {
     // Handle profile subcommands.
     if let Command::Profile { action } = &cli.command {
         handle_profile_command(action, cli.profile.as_deref());
@@ -60,7 +65,7 @@ async fn async_main(cli: Cli) {
 
     // Handle agent subcommands (stop, status).
     if let Command::Agent { action } = &cli.command {
-        handle_agent_command(action, &cli).await;
+        handle_agent_command(action).await;
         return;
     }
 
@@ -106,12 +111,12 @@ async fn async_main(cli: Cli) {
         }
     }
 
-    // Direct mode: call API directly.
-    let config = match build_config(&cli) {
+    // Direct mode: call API directly using resolved credentials.
+    let config = match credentials.to_config() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {}", e);
-            eprintln!("hint: to use agent mode: eval \"$(falcon-cli agent start)\"");
+            eprintln!("hint: to use agent mode: falcon-cli agent start");
             std::process::exit(1);
         }
     };
@@ -130,22 +135,6 @@ async fn async_main(cli: Cli) {
             std::process::exit(1);
         }
     }
-}
-
-fn build_config(cli: &Cli) -> error::Result<Config> {
-    let mut config = Config::from_env()?;
-
-    if let Some(ref id) = cli.client_id {
-        config.client_id = id.clone();
-    }
-    if let Some(ref url) = cli.base_url {
-        config.base_url = url.clone();
-    }
-    if cli.member_cid.is_some() {
-        config.member_cid = cli.member_cid.clone();
-    }
-
-    Ok(config)
 }
 
 /// Check if top-level --help/-h is requested (not for a subcommand).
@@ -470,13 +459,17 @@ fn print_filtered_help(ap: &profile::ActiveProfile) {
 /// Handle `agent start` before tokio runtime is created.
 /// This allows fork() to run in a single-threaded process.
 fn handle_agent_start(
-    cli: &Cli,
     socket: Option<&str>,
     config: Option<&str>,
     foreground: bool,
-    shared: bool,
+    credentials: FalconCredentials,
 ) {
-    let config_obj = match build_config(cli) {
+    if let Err(e) = credentials.validate() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+
+    let config_obj = match credentials.to_config() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -494,12 +487,19 @@ fn handle_agent_start(
     };
     let config_path = config.map(std::path::PathBuf::from);
 
+    // Clear credential environment variables before fork.
+    // The child process will use the FalconCredentials struct instead.
+    // SAFETY: Single-threaded context (before tokio runtime creation).
+    unsafe {
+        FalconCredentials::clear_env();
+    }
+
     if let Err(e) = agent::server::start(
         falcon,
         &socket_path,
         config_path.as_deref(),
         foreground,
-        shared,
+        credentials,
     ) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -507,7 +507,7 @@ fn handle_agent_start(
 }
 
 /// Handle agent subcommands other than `start` (stop, status).
-async fn handle_agent_command(action: &AgentAction, _cli: &Cli) {
+async fn handle_agent_command(action: &AgentAction) {
     match action {
         AgentAction::Start { .. } => {
             // Handled in main() before tokio runtime.
@@ -519,21 +519,18 @@ async fn handle_agent_command(action: &AgentAction, _cli: &Cli) {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
-            } else {
-                let socket_path = agent::resolve_socket_path(socket.as_deref());
-                if let Err(e) = agent::client::stop(&socket_path) {
+            } else if let Some(s) = socket {
+                if let Err(e) = agent::client::stop(&std::path::PathBuf::from(s)) {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            } else if let Err(e) = agent::client::stop_from_session() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
         }
-        AgentAction::Status { socket, shared } => {
-            let status = if *shared {
-                agent::client::status_shared().await
-            } else {
-                let socket_path = agent::resolve_socket_path(socket.as_deref());
-                agent::client::status(&socket_path).await
-            };
+        AgentAction::Status => {
+            let status = agent::client::status().await;
             let json = serde_json::to_string_pretty(&status)
                 .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
             println!("{}", json);
