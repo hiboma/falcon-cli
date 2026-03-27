@@ -122,7 +122,6 @@ pub fn start(
         // Fork into the background.
         fork_into_background(
             falcon_client,
-            socket_path,
             whitelist,
             rate_limiter,
             session_token,
@@ -135,7 +134,6 @@ pub fn start(
 /// The child runs the agent server, the parent exits.
 fn fork_into_background(
     falcon_client: Arc<crate::client::FalconClient>,
-    _socket_path: &Path,
     whitelist: Arc<CommandWhitelist>,
     rate_limiter: Arc<RateLimiter>,
     session_token: String,

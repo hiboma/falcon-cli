@@ -192,9 +192,3 @@ async fn send_request(stream: UnixStream, request: &AgentRequest) -> Result<Agen
 pub async fn check_running(socket_path: &Path) -> bool {
     connect(socket_path).await.is_ok()
 }
-
-#[allow(dead_code)]
-pub fn read_pid(socket_path: &Path) -> Option<u32> {
-    let pid_path = crate::agent::resolve_pid_path(socket_path);
-    std::fs::read_to_string(&pid_path).ok()?.trim().parse().ok()
-}

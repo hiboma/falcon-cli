@@ -25,8 +25,8 @@ cargo clippy -- -D warnings
 - `FALCON_CLIENT_SECRET` - API client secret (required for direct mode)
 - `FALCON_BASE_URL` - Base URL (default: https://api.crowdstrike.com)
 - `FALCON_MEMBER_CID` - Member CID for MSSP (optional)
-- `FALCON_AGENT_SOCKET` - Agent Unix socket path (set by agent start)
-- `FALCON_AGENT_TOKEN` - Agent session token (set by agent start, triggers auto-detection)
+- `FALCON_AGENT_SOCKET` - Agent Unix socket path (legacy, used by `--socket` flag)
+- `FALCON_AGENT_TOKEN` - Agent session token (legacy, triggers agent routing when set)
 
 ## Agent Mode
 
