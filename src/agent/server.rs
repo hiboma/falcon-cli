@@ -1,6 +1,7 @@
 use crate::agent::handler::RequestHandler;
 use crate::agent::protocol::AgentRequest;
 use crate::agent::security::{CommandWhitelist, RateLimiter, SecurityConfig};
+use crate::config::FalconCredentials;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,30 +14,14 @@ const MAX_REQUEST_SIZE: usize = 1024 * 1024;
 /// Maximum number of concurrent connections.
 const MAX_CONNECTIONS: usize = 64;
 
-/// Interval to check session leader liveness.
-const WATCHDOG_INTERVAL_SECS: u64 = 30;
-
-/// Check if an agent is already running.
-/// Returns the PID of the running agent if found.
-fn check_already_running(shared: bool) -> Option<u32> {
-    // Build a temporary tokio runtime for the async socket check.
+/// Check if an agent is already running via session.json.
+fn check_already_running() -> Option<u32> {
     let rt = tokio::runtime::Runtime::new().ok()?;
 
-    if shared {
-        // Shared mode: check session.json for an existing agent.
-        let session = crate::agent::session::read_session()?;
-        let socket_path = std::path::PathBuf::from(&session.socket_path);
-        if rt.block_on(crate::agent::client::check_running(&socket_path)) {
-            return Some(session.pid);
-        }
-    } else {
-        // Eval mode: check all existing sockets in the socket directory.
-        for socket_path in crate::agent::list_agent_sockets() {
-            if rt.block_on(crate::agent::client::check_running(&socket_path)) {
-                let pid = crate::agent::client::read_pid(&socket_path);
-                return pid;
-            }
-        }
+    let session = crate::agent::session::read_session()?;
+    let socket_path = std::path::PathBuf::from(&session.socket_path);
+    if rt.block_on(crate::agent::client::check_running(&socket_path)) {
+        return Some(session.pid);
     }
 
     None
@@ -44,18 +29,17 @@ fn check_already_running(shared: bool) -> Option<u32> {
 
 /// Start the agent server.
 ///
-/// By default, the agent forks into the background (like ssh-agent).
-/// The parent process outputs shell variables to stdout and exits.
-/// Use `--foreground` to run in the foreground without forking.
+/// The agent always uses `session.json` for cross-terminal auto-detection.
+/// Use `--foreground` to run without forking.
 pub fn start(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
     config_path: Option<&Path>,
     foreground: bool,
-    shared: bool,
+    credentials: FalconCredentials,
 ) -> crate::error::Result<()> {
     // Check if an agent is already running.
-    if let Some(pid) = check_already_running(shared) {
+    if let Some(pid) = check_already_running() {
         eprintln!("agent: already started (pid {})", pid);
         return Ok(());
     }
@@ -126,49 +110,37 @@ pub fn start(
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
             crate::error::FalconError::Config(format!("failed to create tokio runtime: {}", e))
         })?;
-        // SAFETY: getsid(0) is always safe.
-        let session_leader_pid = unsafe { libc::getsid(0) };
         rt.block_on(run_agent(
             falcon_client,
             socket_path,
             whitelist,
             rate_limiter,
             session_token,
-            true,
-            session_leader_pid,
-            shared,
+            credentials,
         ))
     } else {
-        // Fork into the background (ssh-agent style).
+        // Fork into the background.
         fork_into_background(
             falcon_client,
             socket_path,
             whitelist,
             rate_limiter,
             session_token,
-            shared,
+            credentials,
         )
     }
 }
 
 /// Fork the agent process into the background.
-/// The parent outputs SSH Agent-style shell variables and exits.
-/// The child runs the agent server.
+/// The child runs the agent server, the parent exits.
 fn fork_into_background(
     falcon_client: Arc<crate::client::FalconClient>,
-    socket_path: &Path,
+    _socket_path: &Path,
     whitelist: Arc<CommandWhitelist>,
     rate_limiter: Arc<RateLimiter>,
     session_token: String,
-    shared: bool,
+    credentials: FalconCredentials,
 ) -> crate::error::Result<()> {
-    // Record the session leader PID before fork. Using getsid(0) instead of
-    // getppid() so the watchdog monitors the terminal session leader (login
-    // shell), not the immediate parent. This prevents premature shutdown when
-    // launched indirectly (e.g. via Claude Code's temporary shell).
-    // SAFETY: getsid(0) is always safe.
-    let session_leader_pid = unsafe { libc::getsid(0) };
-
     // SAFETY: fork() is safe here because we are single-threaded at this point
     // (tokio runtime has not been created yet).
     let pid = unsafe { libc::fork() };
@@ -203,39 +175,16 @@ fn fork_into_background(
                 whitelist,
                 rate_limiter,
                 session_token,
-                false,
-                session_leader_pid,
-                shared,
+                credentials,
             ))
         }
         child_pid => {
-            // Parent process: output shell variables and exit.
-            // The actual socket path includes the child PID.
-            let actual_socket_path = socket_path
-                .parent()
-                .unwrap_or(Path::new("/tmp"))
-                .join(format!("falcon-{}.sock", child_pid));
-
-            if shared {
-                // Shared mode: no eval output. Session file is written by the child.
-                eprintln!("agent started in shared mode, pid {}", child_pid);
-                eprintln!(
-                    "session file: {}",
-                    crate::agent::session::session_file_path().display()
-                );
-            } else {
-                // Eval mode: output shell variables for eval.
-                println!(
-                    "FALCON_AGENT_SOCKET={}; export FALCON_AGENT_SOCKET;",
-                    actual_socket_path.display()
-                );
-                println!(
-                    "FALCON_AGENT_TOKEN={}; export FALCON_AGENT_TOKEN;",
-                    session_token
-                );
-                println!("FALCON_AGENT_PID={}; export FALCON_AGENT_PID;", child_pid);
-                println!("echo agent started, pid {};", child_pid);
-            }
+            // Parent process: session file is written by the child.
+            eprintln!("agent started, pid {}", child_pid);
+            eprintln!(
+                "session file: {}",
+                crate::agent::session::session_file_path().display()
+            );
             Ok(())
         }
     }
@@ -275,17 +224,14 @@ fn redirect_stdio(socket_path: &Path) {
     }
 }
 
-/// Run the agent server (binds socket, accepts connections, handles shutdown).
-#[allow(clippy::too_many_arguments)]
+/// Run the agent server (accept loop, signal-only shutdown).
 async fn run_agent(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
     whitelist: Arc<CommandWhitelist>,
     rate_limiter: Arc<RateLimiter>,
     session_token: String,
-    print_env: bool,
-    session_leader_pid: libc::pid_t,
-    shared: bool,
+    credentials: FalconCredentials,
 ) -> crate::error::Result<()> {
     // Bind the Unix listener.
     let listener = UnixListener::bind(socket_path).map_err(|e| {
@@ -321,79 +267,44 @@ async fn run_agent(
         whitelist,
         rate_limiter,
         session_token.clone(),
+        credentials,
     ));
 
-    if shared {
-        // Shared mode: write session file for cross-terminal auto-detection.
-        let session_info = crate::agent::session::SessionInfo {
-            socket_path: socket_path.display().to_string(),
-            token: session_token.clone(),
-            pid: std::process::id(),
-            started_at: chrono::Utc::now(),
-        };
-        if let Err(e) = crate::agent::session::write_session(&session_info) {
-            eprintln!("agent: failed to write session file: {}", e);
-        } else {
-            eprintln!(
-                "agent: session file written to {}",
-                crate::agent::session::session_file_path().display()
-            );
-        }
-    }
-
-    if print_env {
-        // Foreground mode: output shell variables to stdout.
-        println!(
-            "FALCON_AGENT_SOCKET={}; export FALCON_AGENT_SOCKET;",
-            socket_path.display()
+    // Write session file for cross-terminal auto-detection.
+    let session_info = crate::agent::session::SessionInfo {
+        socket_path: socket_path.display().to_string(),
+        token: session_token,
+        pid: std::process::id(),
+        started_at: chrono::Utc::now(),
+    };
+    if let Err(e) = crate::agent::session::write_session(&session_info) {
+        eprintln!("agent: failed to write session file: {}", e);
+    } else {
+        eprintln!(
+            "agent: session file written to {}",
+            crate::agent::session::session_file_path().display()
         );
-        println!(
-            "FALCON_AGENT_TOKEN={}; export FALCON_AGENT_TOKEN;",
-            session_token
-        );
-        println!("echo agent started, pid {};", std::process::id());
     }
 
     eprintln!("agent: listening on {}", socket_path.display());
     eprintln!("agent: PID {}", std::process::id());
-    if shared {
-        eprintln!("agent: shared mode (session leader monitoring disabled)");
-    } else {
-        eprintln!("agent: session leader PID {}", session_leader_pid);
-    }
 
-    // Accept loop with graceful shutdown on SIGTERM/SIGINT
-    // and session leader exit detection (eval mode only).
+    // Signal-only shutdown (no session leader monitoring).
     let socket_path_owned = socket_path.to_owned();
     let pid_path_owned = pid_path.clone();
 
-    if shared {
-        // Shared mode: no session leader monitoring, signal-only shutdown.
-        tokio::select! {
-            _ = accept_loop(&listener, handler) => {}
-            _ = shutdown_signal() => {
-                eprintln!("agent: shutting down (signal)");
-            }
-        }
-    } else {
-        tokio::select! {
-            _ = accept_loop(&listener, handler) => {}
-            _ = shutdown_signal() => {
-                eprintln!("agent: shutting down (signal)");
-            }
-            reason = watchdog(session_leader_pid) => {
-                eprintln!("agent: shutting down ({})", reason);
-            }
+    tokio::select! {
+        _ = accept_loop(&listener, handler) => {}
+        _ = shutdown_signal() => {
+            eprintln!("agent: shutting down (signal)");
         }
     }
 
     // Cleanup.
     let _ = std::fs::remove_file(&socket_path_owned);
     let _ = std::fs::remove_file(&pid_path_owned);
-    if shared {
-        crate::agent::session::remove_session();
-        eprintln!("agent: session file removed");
-    }
+    crate::agent::session::remove_session();
+    eprintln!("agent: session file removed");
     eprintln!("agent: stopped");
 
     Ok(())
@@ -531,24 +442,6 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         ctrl_c.await.ok();
-    }
-}
-
-/// Watchdog task: checks session leader liveness.
-/// Returns a reason string when the agent should shut down.
-async fn watchdog(session_leader_pid: libc::pid_t) -> &'static str {
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
-
-    loop {
-        interval.tick().await;
-
-        // Check if session leader is still alive.
-        // SAFETY: kill(pid, 0) checks process existence without sending a signal.
-        let session_alive = unsafe { libc::kill(session_leader_pid, 0) } == 0;
-        if !session_alive {
-            return "session leader exited";
-        }
     }
 }
 

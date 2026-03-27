@@ -1,5 +1,6 @@
 use crate::agent::protocol::{AgentRequest, AgentResponse};
 use crate::agent::security::{AuditLog, CommandWhitelist, RateLimiter};
+use crate::config::FalconCredentials;
 use crate::dispatch;
 use clap::Parser;
 use std::sync::Arc;
@@ -11,6 +12,8 @@ pub struct RequestHandler {
     whitelist: Arc<CommandWhitelist>,
     rate_limiter: Arc<RateLimiter>,
     session_token: String,
+    #[allow(dead_code)]
+    credentials: FalconCredentials,
 }
 
 impl RequestHandler {
@@ -19,12 +22,14 @@ impl RequestHandler {
         whitelist: Arc<CommandWhitelist>,
         rate_limiter: Arc<RateLimiter>,
         session_token: String,
+        credentials: FalconCredentials,
     ) -> Self {
         Self {
             falcon_client,
             whitelist,
             rate_limiter,
             session_token,
+            credentials,
         }
     }
 

@@ -39,23 +39,8 @@ pub async fn send_command(
     }
 }
 
-/// Check the status of the agent.
-pub async fn status(socket_path: &Path) -> AgentStatus {
-    let pid = read_pid(socket_path);
-    let running = check_running(socket_path).await;
-
-    AgentStatus {
-        running,
-        pid,
-        socket_path: socket_path.display().to_string(),
-        uptime_seconds: None,
-        shared: false,
-        session_file: None,
-    }
-}
-
-/// Check the status of the shared agent via session.json.
-pub async fn status_shared() -> AgentStatus {
+/// Check the agent status via session.json.
+pub async fn status() -> AgentStatus {
     let session_path = crate::agent::session::session_file_path();
     match crate::agent::session::read_session() {
         Some(session) => {
@@ -66,7 +51,6 @@ pub async fn status_shared() -> AgentStatus {
                 pid: Some(session.pid),
                 socket_path: session.socket_path,
                 uptime_seconds: None,
-                shared: true,
                 session_file: Some(session_path.display().to_string()),
             }
         }
@@ -75,10 +59,18 @@ pub async fn status_shared() -> AgentStatus {
             pid: None,
             socket_path: String::new(),
             uptime_seconds: None,
-            shared: true,
             session_file: Some(session_path.display().to_string()),
         },
     }
+}
+
+/// Stop the agent using session.json to find the socket path.
+pub fn stop_from_session() -> Result<()> {
+    let session = crate::agent::session::read_session().ok_or_else(|| {
+        FalconError::Config("agent is not running (no session file found)".to_string())
+    })?;
+    let socket_path = std::path::PathBuf::from(&session.socket_path);
+    stop(&socket_path)
 }
 
 /// Stop the agent by sending SIGTERM to the PID.
@@ -201,6 +193,7 @@ pub async fn check_running(socket_path: &Path) -> bool {
     connect(socket_path).await.is_ok()
 }
 
+#[allow(dead_code)]
 pub fn read_pid(socket_path: &Path) -> Option<u32> {
     let pid_path = crate::agent::resolve_pid_path(socket_path);
     std::fs::read_to_string(&pid_path).ok()?.trim().parse().ok()
