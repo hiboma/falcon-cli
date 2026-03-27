@@ -52,16 +52,15 @@ fn test_host_list_help() {
 }
 
 #[test]
-fn test_output_format_option() {
+fn test_output_format_hidden_from_help() {
     let output = Command::new("cargo")
         .args(["run", "--", "--help"])
         .output()
         .expect("failed to execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--output"));
-    assert!(stdout.contains("json"));
-    assert!(stdout.contains("table"));
+    // --output is hidden from help (still functional as a CLI option).
+    assert!(!stdout.contains("--output"));
 }
 
 #[test]

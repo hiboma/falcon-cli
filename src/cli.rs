@@ -90,19 +90,19 @@ pub enum OutputFormat {
 )]
 pub struct Cli {
     /// CrowdStrike API client ID (overrides FALCON_CLIENT_ID)
-    #[arg(long, env = "FALCON_CLIENT_ID", hide_env = true)]
+    #[arg(long, env = "FALCON_CLIENT_ID", hide_env = true, hide = true)]
     pub client_id: Option<String>,
 
     /// Base URL for the Falcon API (overrides FALCON_BASE_URL)
-    #[arg(long, env = "FALCON_BASE_URL", hide_env = true)]
+    #[arg(long, env = "FALCON_BASE_URL", hide_env = true, hide = true)]
     pub base_url: Option<String>,
 
     /// Member CID for MSSP (overrides FALCON_MEMBER_CID)
-    #[arg(long, env = "FALCON_MEMBER_CID", hide_env = true)]
+    #[arg(long, env = "FALCON_MEMBER_CID", hide_env = true, hide = true)]
     pub member_cid: Option<String>,
 
     /// Output format (json or table)
-    #[arg(long, short, default_value = "json")]
+    #[arg(long, short, default_value = "json", hide = true)]
     pub output: OutputFormat,
 
     /// Pretty-print JSON output
@@ -118,7 +118,7 @@ pub struct Cli {
     pub token: Option<String>,
 
     /// Skip agent auto-detection and use direct API mode
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub no_agent: bool,
 
     /// Profile name to filter available commands (overrides FALCON_PROFILE)
@@ -831,7 +831,7 @@ pub enum Command {
     },
 
     // ── Agent ──
-    /// Credential agent for API access isolation (ssh-agent model)
+    /// Credential agent for API access isolation
     #[command(next_help_heading = "Agent")]
     Agent {
         #[command(subcommand)]
@@ -860,10 +860,10 @@ pub enum ProfileAction {
     List,
 }
 
-/// Agent subcommand actions (ssh-agent style credential agent).
+/// Agent subcommand actions.
 #[derive(Subcommand, Debug)]
 pub enum AgentAction {
-    /// Start the credential agent (run under `op run`, like ssh-agent)
+    /// Start the credential agent
     Start {
         /// Path to the Unix domain socket
         #[arg(long)]
@@ -874,9 +874,6 @@ pub enum AgentAction {
         /// Run in the foreground (do not fork into background)
         #[arg(long)]
         foreground: bool,
-        /// Share the agent across terminals via session file (no eval needed)
-        #[arg(long)]
-        shared: bool,
     },
     /// Stop the running agent
     Stop {
@@ -888,12 +885,5 @@ pub enum AgentAction {
         all: bool,
     },
     /// Show agent status
-    Status {
-        /// Path to the Unix domain socket
-        #[arg(long)]
-        socket: Option<String>,
-        /// Show status from shared session file instead of socket
-        #[arg(long)]
-        shared: bool,
-    },
+    Status,
 }

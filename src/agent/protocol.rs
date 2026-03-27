@@ -91,8 +91,6 @@ pub struct AgentStatus {
     pub pid: Option<u32>,
     pub socket_path: String,
     pub uptime_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub shared: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_file: Option<String>,
 }

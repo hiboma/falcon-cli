@@ -25,23 +25,19 @@ cargo clippy -- -D warnings
 - `FALCON_CLIENT_SECRET` - API client secret (required for direct mode)
 - `FALCON_BASE_URL` - Base URL (default: https://api.crowdstrike.com)
 - `FALCON_MEMBER_CID` - Member CID for MSSP (optional)
-- `FALCON_AGENT_SOCKET` - Agent Unix socket path (set by agent start)
-- `FALCON_AGENT_TOKEN` - Agent session token (set by agent start, triggers auto-detection)
+- `FALCON_AGENT_SOCKET` - Agent Unix socket path (legacy, used by `--socket` flag)
+- `FALCON_AGENT_TOKEN` - Agent session token (legacy, triggers agent routing when set)
 
-## Agent Mode (ssh-agent model)
+## Agent Mode
 
-- `eval "$(falcon-cli agent start)"` forks a background agent (ssh-agent style)
-- `FALCON_AGENT_TOKEN` in env triggers automatic agent routing (no flags needed)
+- `falcon-cli agent start` forks a background agent and writes `session.json`
+- Any terminal auto-detects the agent via `session.json` (cross-terminal)
 - Each agent uses a PID-based unique socket path (`falcon-<PID>.sock`)
-- Watchdog monitors terminal session liveness (`getsid`); no idle timeout
-- Duplicate start is detected via socket connection check ("already started")
+- Credentials are resolved into `FalconCredentials` before fork; `FALCON_*` env vars are cleared pre-fork
+- The `overwrite_environ_value()` function scrubs the C `environ` array to prevent `/proc/<pid>/environ` leakage
+- Signal-only shutdown (SIGTERM/SIGINT); no watchdog or session leader monitoring
+- Duplicate start is detected via session.json + socket connection check
 - `fork()` must happen before tokio runtime creation (see `main.rs`)
-
-### Shared Mode
-
-- `falcon-cli agent start --shared` writes session info to `~/.local/share/falcon-cli/session.json`
-- No `eval` needed; any terminal can auto-detect the agent via session file
-- Session leader monitoring is disabled; shutdown via signal only
 - `--no-agent` flag forces direct API mode, skipping agent auto-detection
 - Priority: `--no-agent` > `FALCON_AGENT_TOKEN` env > session.json > direct mode
 
