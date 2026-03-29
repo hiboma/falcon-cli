@@ -38,7 +38,7 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../falcon-cli-${{ matrix.target }}.tar.gz falcon-cli
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: falcon-cli-${{ matrix.target }}
           path: falcon-cli-${{ matrix.target }}.*
