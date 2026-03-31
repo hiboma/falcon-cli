@@ -54,7 +54,7 @@ Set the following environment variables:
 
 CLI options (`--client-id`, `--base-url`, `--member-cid`) override environment variables.
 
-> **Note:** `FALCON_CLIENT_SECRET` is only configurable via environment variable or `.env` file to prevent exposure in process lists. Ensure `.env` files have restrictive permissions (`chmod 600 .env`).
+> **Note:** `FALCON_CLIENT_SECRET` has no CLI flag to prevent exposure in process lists. Use environment variables, `.env` files, or `credentials.toml`. Ensure these files have restrictive permissions (`chmod 600`).
 
 ### Credentials File (TOML)
 

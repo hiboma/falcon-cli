@@ -58,12 +58,24 @@ fn credentials_search_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Filter empty strings to None so that unfilled template values
+/// (e.g. `client_id = ""`) do not bypass validation.
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|v| !v.is_empty())
+}
+
 /// Load credentials from the first credentials.toml found.
 fn load_credentials_file() -> CredentialsFile {
     for path in credentials_search_paths() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(root) = toml::from_str::<CredentialsFileRoot>(&content) {
-                return root.credentials;
+                let c = root.credentials;
+                return CredentialsFile {
+                    client_id: non_empty(c.client_id),
+                    client_secret: non_empty(c.client_secret),
+                    base_url: non_empty(c.base_url),
+                    member_cid: non_empty(c.member_cid),
+                };
             }
         }
     }
@@ -384,15 +396,13 @@ client_secret = "toml-secret"
     }
 
     #[test]
-    fn test_credentials_file_empty_values_ignored() {
-        let toml_str = r#"
-[credentials]
-client_id = ""
-client_secret = ""
-"#;
-        let root: CredentialsFileRoot = toml::from_str(toml_str).unwrap();
-        // Empty strings are parsed as Some(""), not None
-        assert_eq!(root.credentials.client_id.as_deref(), Some(""));
+    fn test_non_empty_filters_empty_strings() {
+        assert_eq!(non_empty(Some("".to_string())), None);
+        assert_eq!(
+            non_empty(Some("value".to_string())),
+            Some("value".to_string())
+        );
+        assert_eq!(non_empty(None), None);
     }
 
     #[test]
