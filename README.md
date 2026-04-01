@@ -41,6 +41,8 @@ cargo install --path .
 
 ## Configuration
 
+### Environment Variables
+
 Set the following environment variables:
 
 | Variable | Required | Description |
@@ -52,7 +54,60 @@ Set the following environment variables:
 
 CLI options (`--client-id`, `--base-url`, `--member-cid`) override environment variables.
 
-> **Note:** `FALCON_CLIENT_SECRET` is only configurable via environment variable or `.env` file to prevent exposure in process lists. Ensure `.env` files have restrictive permissions (`chmod 600 .env`).
+> **Note:** `FALCON_CLIENT_SECRET` has no CLI flag to prevent exposure in process lists. Use environment variables, `.env` files, or `credentials.toml`. Ensure these files have restrictive permissions (`chmod 600`).
+
+### Credentials File (TOML)
+
+You can configure credentials using a `credentials.toml` file. Files are loaded in the following order:
+
+1. `./.falcon-credentials.toml` (project-local)
+2. `$XDG_CONFIG_HOME/falcon-cli/credentials.toml` (default: `~/.config/falcon-cli/credentials.toml`)
+
+Priority: CLI arguments > environment variables > credentials.toml
+
+Template:
+
+```toml
+# falcon-cli credentials configuration
+#
+# Security notes:
+#   - This file contains sensitive information
+#   - Set file permissions to 0600: chmod 600 credentials.toml
+#   - Add to .gitignore to prevent committing to the repository
+#   - Consider using environment variables or a secrets manager instead
+
+[credentials]
+# CrowdStrike Falcon API OAuth2 client ID (required)
+client_id = ""
+
+# CrowdStrike Falcon API OAuth2 client secret (required)
+client_secret = ""
+
+# API base URL (optional)
+# Default: https://api.crowdstrike.com
+# US-2: https://api.us-2.crowdstrike.com
+# EU-1: https://api.eu-1.crowdstrike.com
+# US-GOV-1: https://api.laggar.gcw.crowdstrike.com
+# base_url = "https://api.crowdstrike.com"
+
+# Member CID for MSSP (optional)
+# Set this to specify a child tenant in multi-tenant environments
+# member_cid = ""
+```
+
+Setup:
+
+```bash
+# Global configuration (XDG Base Directory)
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/falcon-cli"
+cp credentials.toml "${XDG_CONFIG_HOME:-$HOME/.config}/falcon-cli/credentials.toml"
+chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/falcon-cli/credentials.toml"
+
+# Project-local configuration
+cp credentials.toml .falcon-credentials.toml
+chmod 600 .falcon-credentials.toml
+echo ".falcon-credentials.toml" >> .gitignore
+```
 
 ## Agent Mode
 

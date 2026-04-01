@@ -1,3 +1,6 @@
+use serde::Deserialize;
+use std::path::PathBuf;
+
 use crate::error::{FalconError, Result};
 
 #[derive(Debug, Clone)]
@@ -8,7 +11,23 @@ pub struct Config {
     pub member_cid: Option<String>,
 }
 
-/// Resolved Falcon API credentials collected from CLI args and environment variables.
+/// TOML representation of `[credentials]` in credentials.toml.
+#[derive(Debug, Deserialize, Default)]
+struct CredentialsFileRoot {
+    #[serde(default)]
+    credentials: CredentialsFile,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CredentialsFile {
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    base_url: Option<String>,
+    member_cid: Option<String>,
+}
+
+/// Resolved Falcon API credentials collected from CLI args, environment variables,
+/// and credentials.toml.
 /// Once constructed, the process should call `FalconCredentials::clear_env()` to remove
 /// credential environment variables so that forked child processes do not inherit them.
 #[derive(Debug, Clone, Default)]
@@ -19,28 +38,79 @@ pub struct FalconCredentials {
     pub member_cid: Option<String>,
 }
 
+/// Search paths for credentials.toml (highest priority first).
+fn credentials_search_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from(".falcon-credentials.toml")];
+    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
+        paths.push(
+            PathBuf::from(config_home)
+                .join("falcon-cli")
+                .join("credentials.toml"),
+        );
+    } else if let Ok(home) = std::env::var("HOME") {
+        paths.push(
+            PathBuf::from(home)
+                .join(".config")
+                .join("falcon-cli")
+                .join("credentials.toml"),
+        );
+    }
+    paths
+}
+
+/// Filter empty strings to None so that unfilled template values
+/// (e.g. `client_id = ""`) do not bypass validation.
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|v| !v.is_empty())
+}
+
+/// Load credentials from the first credentials.toml found.
+fn load_credentials_file() -> CredentialsFile {
+    for path in credentials_search_paths() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(root) = toml::from_str::<CredentialsFileRoot>(&content) {
+                let c = root.credentials;
+                return CredentialsFile {
+                    client_id: non_empty(c.client_id),
+                    client_secret: non_empty(c.client_secret),
+                    base_url: non_empty(c.base_url),
+                    member_cid: non_empty(c.member_cid),
+                };
+            }
+        }
+    }
+    CredentialsFile::default()
+}
+
 impl FalconCredentials {
-    /// Resolve credentials from CLI args and environment variables.
-    /// Priority: CLI args > environment variables > defaults.
+    /// Resolve credentials from CLI args, environment variables, and credentials.toml.
+    /// Priority: CLI args > environment variables > credentials.toml > defaults.
     pub fn resolve(
         cli_client_id: Option<&str>,
         cli_base_url: Option<&str>,
         cli_member_cid: Option<&str>,
     ) -> Self {
+        let file = load_credentials_file();
+
         let client_id = cli_client_id
             .map(String::from)
-            .or_else(|| std::env::var("FALCON_CLIENT_ID").ok());
+            .or_else(|| std::env::var("FALCON_CLIENT_ID").ok())
+            .or(file.client_id);
 
-        let client_secret = std::env::var("FALCON_CLIENT_SECRET").ok();
+        let client_secret = std::env::var("FALCON_CLIENT_SECRET")
+            .ok()
+            .or(file.client_secret);
 
         let base_url = cli_base_url
             .map(String::from)
             .or_else(|| std::env::var("FALCON_BASE_URL").ok())
+            .or(file.base_url)
             .unwrap_or_else(|| "https://api.crowdstrike.com".to_string());
 
         let member_cid = cli_member_cid
             .map(String::from)
-            .or_else(|| std::env::var("FALCON_MEMBER_CID").ok());
+            .or_else(|| std::env::var("FALCON_MEMBER_CID").ok())
+            .or(file.member_cid);
 
         Self {
             client_id,
@@ -280,6 +350,59 @@ mod tests {
         assert!(std::env::var("FALCON_CLIENT_SECRET").is_err());
         assert!(std::env::var("FALCON_BASE_URL").is_err());
         assert!(std::env::var("FALCON_MEMBER_CID").is_err());
+    }
+
+    #[test]
+    fn test_credentials_file_parse_full() {
+        let toml_str = r#"
+[credentials]
+client_id = "toml-id"
+client_secret = "toml-secret"
+base_url = "https://api.eu-1.crowdstrike.com"
+member_cid = "toml-cid"
+"#;
+        let root: CredentialsFileRoot = toml::from_str(toml_str).unwrap();
+        assert_eq!(root.credentials.client_id.as_deref(), Some("toml-id"));
+        assert_eq!(
+            root.credentials.client_secret.as_deref(),
+            Some("toml-secret")
+        );
+        assert_eq!(
+            root.credentials.base_url.as_deref(),
+            Some("https://api.eu-1.crowdstrike.com")
+        );
+        assert_eq!(root.credentials.member_cid.as_deref(), Some("toml-cid"));
+    }
+
+    #[test]
+    fn test_credentials_file_parse_minimal() {
+        let toml_str = r#"
+[credentials]
+client_id = "toml-id"
+client_secret = "toml-secret"
+"#;
+        let root: CredentialsFileRoot = toml::from_str(toml_str).unwrap();
+        assert_eq!(root.credentials.client_id.as_deref(), Some("toml-id"));
+        assert!(root.credentials.base_url.is_none());
+        assert!(root.credentials.member_cid.is_none());
+    }
+
+    #[test]
+    fn test_credentials_file_parse_empty() {
+        let toml_str = "";
+        let root: CredentialsFileRoot = toml::from_str(toml_str).unwrap();
+        assert!(root.credentials.client_id.is_none());
+        assert!(root.credentials.client_secret.is_none());
+    }
+
+    #[test]
+    fn test_non_empty_filters_empty_strings() {
+        assert_eq!(non_empty(Some("".to_string())), None);
+        assert_eq!(
+            non_empty(Some("value".to_string())),
+            Some("value".to_string())
+        );
+        assert_eq!(non_empty(None), None);
     }
 
     #[test]
