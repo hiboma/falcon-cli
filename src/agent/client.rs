@@ -98,7 +98,9 @@ pub fn stop(socket_path: &Path) -> Result<()> {
         })?
         .trim()
         .parse::<i32>()
-        .map_err(|e| FalconError::Config(format!("invalid PID in {}: {}", pid_path.display(), e)))?;
+        .map_err(|e| {
+            FalconError::Config(format!("invalid PID in {}: {}", pid_path.display(), e))
+        })?;
 
     send_sigterm(pid)?;
     cleanup_pid_file(socket_path);
@@ -109,7 +111,17 @@ pub fn stop(socket_path: &Path) -> Result<()> {
 }
 
 /// Send SIGTERM to the given PID.
+///
+/// Rejects non-positive PIDs to prevent sending signals to process groups
+/// (pid == 0 targets the caller's group, pid == -1 targets all processes).
 fn send_sigterm(pid: i32) -> Result<()> {
+    if pid <= 0 {
+        return Err(FalconError::Config(format!(
+            "invalid PID {}: must be a positive integer",
+            pid
+        )));
+    }
+
     #[cfg(unix)]
     {
         let ret = unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -156,8 +168,6 @@ pub fn stop_all() -> Result<()> {
             sockets.len()
         )))
     } else {
-        // Clean up session file when stopping all agents.
-        crate::agent::session::remove_session();
         eprintln!("stopped {} agent(s)", sockets.len());
         Ok(())
     }
