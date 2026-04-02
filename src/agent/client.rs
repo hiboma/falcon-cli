@@ -64,40 +64,82 @@ pub async fn status() -> AgentStatus {
     }
 }
 
-/// Stop the agent using session.json to find the socket path.
+/// Stop the agent using session.json to find the PID and socket path.
+///
+/// Unlike `stop()`, this uses the PID stored in session.json directly,
+/// avoiding the need to read a separate PID file.
 pub fn stop_from_session() -> Result<()> {
     let session = crate::agent::session::read_session().ok_or_else(|| {
         FalconError::Config("agent is not running (no session file found)".to_string())
     })?;
     let socket_path = std::path::PathBuf::from(&session.socket_path);
-    stop(&socket_path)
+    let pid = session.pid as i32;
+
+    send_sigterm(pid)?;
+    cleanup_pid_file(&socket_path);
+    cleanup_session_file(&socket_path);
+
+    eprintln!("sent SIGTERM to agent (PID {})", pid);
+    Ok(())
 }
 
-/// Stop the agent by sending SIGTERM to the PID.
+/// Stop the agent by reading the PID file and sending SIGTERM.
+///
+/// Used when stopping by socket path (e.g., `--socket` or `--all`).
 pub fn stop(socket_path: &Path) -> Result<()> {
     let pid_path = crate::agent::resolve_pid_path(socket_path);
     let pid = std::fs::read_to_string(&pid_path)
-        .map_err(|e| FalconError::Config(format!("failed to read PID file: {}", e)))?
+        .map_err(|e| {
+            FalconError::Config(format!(
+                "failed to read PID file {}: {} (is the agent running?)",
+                pid_path.display(),
+                e
+            ))
+        })?
         .trim()
         .parse::<i32>()
-        .map_err(|e| FalconError::Config(format!("invalid PID: {}", e)))?;
+        .map_err(|e| {
+            FalconError::Config(format!("invalid PID in {}: {}", pid_path.display(), e))
+        })?;
+
+    send_sigterm(pid)?;
+    cleanup_pid_file(socket_path);
+    cleanup_session_file(socket_path);
+
+    eprintln!("sent SIGTERM to agent (PID {})", pid);
+    Ok(())
+}
+
+/// Send SIGTERM to the given PID.
+///
+/// Rejects non-positive PIDs to prevent sending signals to process groups
+/// (pid == 0 targets the caller's group, pid == -1 targets all processes).
+fn send_sigterm(pid: i32) -> Result<()> {
+    if pid <= 0 {
+        return Err(FalconError::Config(format!(
+            "invalid PID {}: must be a positive integer",
+            pid
+        )));
+    }
 
     #[cfg(unix)]
     {
         let ret = unsafe { libc::kill(pid, libc::SIGTERM) };
         if ret != 0 {
+            let err = std::io::Error::last_os_error();
             return Err(FalconError::Config(format!(
-                "failed to send SIGTERM to PID {}",
-                pid
+                "failed to send SIGTERM to PID {}: {}",
+                pid, err
             )));
         }
     }
-
-    // Clean up session file if it references this agent.
-    cleanup_session_file(socket_path);
-
-    eprintln!("sent SIGTERM to agent (PID {})", pid);
     Ok(())
+}
+
+/// Remove the PID file associated with the socket path.
+fn cleanup_pid_file(socket_path: &Path) {
+    let pid_path = crate::agent::resolve_pid_path(socket_path);
+    let _ = std::fs::remove_file(&pid_path);
 }
 
 /// Stop all running agent instances.
@@ -126,8 +168,6 @@ pub fn stop_all() -> Result<()> {
             sockets.len()
         )))
     } else {
-        // Clean up session file when stopping all agents.
-        crate::agent::session::remove_session();
         eprintln!("stopped {} agent(s)", sockets.len());
         Ok(())
     }
