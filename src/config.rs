@@ -284,12 +284,15 @@ mod tests {
     }
 
     /// Helper to ensure FALCON_* env vars are cleared before tests that call resolve().
+    /// Also redirects XDG_CONFIG_HOME/HOME to prevent loading credentials.toml.
     unsafe fn clear_falcon_env() {
         unsafe {
             std::env::remove_var("FALCON_CLIENT_ID");
             std::env::remove_var("FALCON_CLIENT_SECRET");
             std::env::remove_var("FALCON_BASE_URL");
             std::env::remove_var("FALCON_MEMBER_CID");
+            std::env::set_var("XDG_CONFIG_HOME", "/nonexistent");
+            std::env::set_var("HOME", "/nonexistent");
         }
     }
 

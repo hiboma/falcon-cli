@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::Subcommand;
 
 use crate::client::FalconClient;
@@ -36,6 +37,19 @@ pub enum Action {
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
     },
+    /// Download report execution result
+    ///
+    /// Downloads the report data (typically gzip-compressed CSV) for a given
+    /// report execution ID. Writes to a file or stdout.
+    Download {
+        /// Report execution ID
+        #[arg(long, required = true)]
+        id: String,
+
+        /// Output file path (default: stdout)
+        #[arg(long, short)]
+        output: Option<String>,
+    },
 }
 
 pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json::Value> {
@@ -57,6 +71,18 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             let ids: Vec<String> = id.iter().map(|i| format!("ids={}", i)).collect();
             let path = format!("/reports/entities/report-executions/v1?{}", ids.join("&"));
             client.get(&path).await
+        }
+        Action::Download { id, output } => {
+            let path = format!("/reports/entities/report-executions-download/v1?ids={}", id);
+            let data = client.get_bytes(&path).await?;
+            let encoded = STANDARD.encode(&data);
+
+            Ok(serde_json::json!({
+                "_binary": true,
+                "data": encoded,
+                "bytes": data.len(),
+                "output": output,
+            }))
         }
     }
 }
