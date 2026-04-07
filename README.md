@@ -9,7 +9,7 @@ Beta - v0.9.0
 ## Features
 
 - OAuth2 Client Credentials authentication with automatic token refresh
-- 104 subcommands covering the CrowdStrike Falcon API
+- 105 subcommands covering the CrowdStrike Falcon API
 - Extended commands that combine multiple API calls (e.g., `automated-lead`)
 - JSON output compatible with jq (default)
 - Table output for human-readable display (`--output table`)
@@ -132,7 +132,7 @@ export FALCON_PROFILE=ai-agent
 falcon-cli alert list --limit 10
 ```
 
-Profile configuration (`.falcon-cli.toml` or `~/.config/falcon-cli/config.toml`):
+Profile configuration (`.falcon-cli.toml` or `~/.config/falcon-cli/config.toml`). Run `falcon-cli profile init` to generate a full template with built-in profiles:
 
 ```toml
 default_profile = "security-ops"
