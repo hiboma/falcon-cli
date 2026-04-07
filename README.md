@@ -4,14 +4,18 @@ A CLI tool for interacting with the CrowdStrike Falcon API, built in Rust.
 
 ## Status
 
-Beta - v0.1.0
+Beta - v0.9.0
 
 ## Features
 
 - OAuth2 Client Credentials authentication with automatic token refresh
-- 105 subcommands covering the full CrowdStrike Falcon API
+- 105 subcommands covering the CrowdStrike Falcon API
+- Extended commands that combine multiple API calls (e.g., `automated-lead`)
 - JSON output compatible with jq (default)
 - Table output for human-readable display (`--output table`)
+- Pretty-printed JSON output (`--pretty`)
+- Command profiles to restrict available subcommands per use case
+- Shell completion scripts (Bash, Zsh, Fish, PowerShell)
 - Cross-platform binaries (Linux, macOS)
 - Credential agent for API access isolation
 
@@ -109,6 +113,45 @@ chmod 600 .falcon-credentials.toml
 echo ".falcon-credentials.toml" >> .gitignore
 ```
 
+### Profiles
+
+Profiles restrict which subcommands are available. This is useful for limiting scope per use case (e.g., security operations, AI agent context).
+
+```bash
+# Initialize a profile configuration file
+falcon-cli profile init
+
+# List available profiles
+falcon-cli profile list
+
+# Use a specific profile
+falcon-cli --profile security-ops alert list --limit 10
+
+# Or set via environment variable
+export FALCON_PROFILE=ai-agent
+falcon-cli alert list --limit 10
+```
+
+Profile configuration (`.falcon-cli.toml` or `~/.config/falcon-cli/config.toml`). Run `falcon-cli profile init` to generate a full template with built-in profiles:
+
+```toml
+default_profile = "security-ops"
+
+[profiles.security-ops]
+description = "Security operations essentials"
+commands = ["alert", "detection", "incident", "host", "rtr"]
+
+[profiles.ai-agent]
+description = "Minimal set for AI agent context"
+commands = ["alert", "detection", "host", "ioc", "spotlight-vuln", "rtr"]
+
+[profiles.all]
+description = "All commands enabled"
+commands = ["*"]
+```
+
+Priority: `--profile` flag > `FALCON_PROFILE` env > `default_profile` in config
+
 ## Agent Mode
 
 The credential agent isolates API credentials in a separate process. This enables LLM agents (e.g., Claude Code) to use falcon-cli without direct access to secrets. Credentials are resolved into an in-memory struct before fork, and `FALCON_*` environment variables are cleared from the process to prevent leakage via `/proc/<pid>/environ`.
@@ -150,6 +193,13 @@ falcon-cli agent stop --all
 falcon-cli agent start --foreground
 ```
 
+### Agent auto-detection priority
+
+1. `--no-agent` flag — forces direct API mode
+2. `FALCON_AGENT_TOKEN` env — connects to agent via socket
+3. `session.json` — auto-detects running agent
+4. Direct API mode — falls back to direct API calls
+
 ### Lifecycle
 
 - The agent shuts down on SIGTERM or SIGINT (signal-only shutdown).
@@ -159,13 +209,11 @@ For details, see [ADR-0001: Agent Mode for Credential Isolation](docs/adr/0001-d
 
 ## Usage
 
-### Security Operations
-
-Commands for managing hosts, detections, incidents, alerts, and response sessions.
+### Detection & Response
 
 ```bash
-# List hosts with a filter
-falcon-cli host list --filter "platform_name:'Linux'" --limit 10
+# List alerts with a filter
+falcon-cli alert list --filter "status:'new'" --limit 10
 
 # Get detection summaries
 falcon-cli detection list --filter "status:'new'" --limit 5
@@ -176,90 +224,53 @@ falcon-cli incident get --id <INCIDENT_ID>
 
 | Command | Description |
 |---|---|
-| `host` | Manage hosts |
+| `alert` | Manage alerts |
 | `detection` | Manage detections |
 | `incident` | Manage incidents |
-| `alert` | Manage alerts |
-| `quarantine` | Manage quarantined files |
 | `rtr` | Manage real-time response sessions |
 | `rtr-admin` | Manage real-time response (admin) |
 | `rtr-audit` | Manage real-time response audit |
+| `recon` | Manage recon monitoring rules |
+| `overwatch` | Manage OverWatch dashboard |
+| `sandbox` | Manage Falcon Intelligence Sandbox |
+| `quarantine` | Manage quarantined files |
+| `drift` | Manage drift indicators |
 
-### Policies
+### Host Management
 
-Commands for managing security policies.
+```bash
+# List hosts with a filter
+falcon-cli host list --filter "platform_name:'Linux'" --limit 10
+
+# List host groups
+falcon-cli host-group list --limit 10
+```
+
+| Command | Description |
+|---|---|
+| `host` | Manage hosts |
+| `host-group` | Manage host groups |
+| `host-migration` | Manage host migrations |
+| `discover` | Discover assets |
+| `device-content` | Manage device content |
+| `device-control-policy` | Manage device control policies |
+
+### Policy Management
 
 ```bash
 # List prevention policies
 falcon-cli prevention-policy list --limit 10
-
-# Get device control policy details
-falcon-cli device-control-policy get --id <POLICY_ID>
 ```
 
 | Command | Description |
 |---|---|
 | `prevention-policy` | Manage prevention policies |
-| `device-control-policy` | Manage device control policies |
-| `firewall-policy` | Manage firewall policies |
-| `sensor-update-policy` | Manage sensor update policies |
 | `response-policy` | Manage response policies |
+| `sensor-update-policy` | Manage sensor update policies |
 | `content-update-policy` | Manage content update policies |
-| `ioa-exclusion` | Manage IOA exclusions |
-
-### Threat Intelligence
-
-Commands for threat intelligence and indicator management.
-
-```bash
-# List threat actors
-falcon-cli intel list --limit 10
-
-# List IOC indicators
-falcon-cli ioc list --filter "type:'domain'" --limit 20
-
-# List recon monitoring rules
-falcon-cli recon list --limit 10
-```
-
-| Command | Description |
-|---|---|
-| `intel` | Manage threat intelligence |
-| `intel-feed` | Manage intelligence feeds |
-| `intel-graph` | Manage intelligence indicator graph |
-| `ioc` | Manage IOC indicators |
-| `iocs` | Manage IOCs (legacy) |
-| `custom-ioa` | Manage custom IOA rules |
-| `malquery` | Manage MalQuery |
-| `sandbox` | Manage Falcon Intelligence Sandbox |
-| `recon` | Manage recon monitoring rules |
-| `tailored-intel` | Manage tailored intelligence |
-
-### Host Management
-
-Commands for managing host groups, sensors, and exclusions.
-
-```bash
-# List host groups
-falcon-cli host-group list --limit 10
-
-# List sensor downloads
-falcon-cli sensor-download list --limit 5
-```
-
-| Command | Description |
-|---|---|
-| `host-group` | Manage host groups |
-| `host-migration` | Manage host migrations |
-| `sensor-download` | Manage sensor downloads |
-| `sensor-usage` | Manage sensor usage |
-| `sv-exclusion` | Manage sensor visibility exclusions |
-| `ml-exclusion` | Manage ML exclusions |
-| `install-token` | Manage installation tokens |
+| `firewall-policy` | Manage firewall policies |
 
 ### Cloud Security
-
-Commands for multi-cloud security posture management.
 
 ```bash
 # List AWS cloud registrations
@@ -273,9 +284,9 @@ falcon-cli cloud-detection list --limit 10
 |---|---|
 | `cloud-aws` | Manage AWS cloud registration |
 | `cloud-azure` | Manage Azure cloud registration |
+| `cloud-connect-aws` | Manage AWS cloud connections |
 | `cloud-gcp` | Manage GCP cloud registration |
 | `cloud-oci` | Manage OCI cloud registration |
-| `cloud-connect-aws` | Manage AWS cloud connections |
 | `cloud-policy` | Manage cloud policies |
 | `cloud-security` | Manage cloud security |
 | `cloud-asset` | Manage cloud security assets |
@@ -284,11 +295,8 @@ falcon-cli cloud-detection list --limit 10
 | `cloud-snapshot` | Manage cloud snapshots |
 | `cspm` | Manage CSPM registration |
 | `d4c` | Manage D4C registration |
-| `config-assessment` | Manage configuration assessments |
 
-### Container Security
-
-Commands for container and Kubernetes workload security.
+### Container & Kubernetes
 
 ```bash
 # List container images
@@ -302,17 +310,17 @@ falcon-cli container-vuln list --limit 10
 |---|---|
 | `container-alert` | Manage container alerts |
 | `container-detection` | Manage container detections |
-| `container-image` | Manage container images |
 | `container-compliance` | Manage container image compliance |
+| `container-image` | Manage container images |
 | `container-package` | Manage container packages |
 | `container-vuln` | Manage container vulnerabilities |
 | `falcon-container` | Manage Falcon container |
 | `k8s` | Manage Kubernetes protection |
 | `k8s-compliance` | Manage Kubernetes container compliance |
+| `unidentified-container` | Manage unidentified containers |
+| `image-policy` | Manage image assessment policies |
 
 ### Vulnerability Management
-
-Commands for vulnerability and exposure management.
 
 ```bash
 # List Spotlight vulnerabilities
@@ -327,78 +335,126 @@ falcon-cli exposure list --limit 10
 | `spotlight-vuln` | Manage Spotlight vulnerabilities |
 | `spotlight-eval` | Manage Spotlight evaluation logic |
 | `spotlight-metadata` | Manage Spotlight vulnerability metadata |
-| `exposure` | Manage exposure |
 | `serverless-vuln` | Manage serverless vulnerabilities |
-| `drift` | Manage drift indicators |
-| `unidentified-container` | Manage unidentified containers |
-| `image-policy` | Manage image assessment policies |
+| `exposure` | Manage exposure |
+| `config-assessment` | Manage configuration assessments |
 | `config-eval` | Manage configuration assessment evaluation logic |
 
-### Monitoring
-
-Commands for monitoring and dashboards.
+### Exclusions & IOC
 
 ```bash
-# List event streams
-falcon-cli event-stream list --limit 5
+# List IOC indicators
+falcon-cli ioc list --filter "type:'domain'" --limit 20
 
-# Get ThreatGraph edge types
+# List custom IOA rules
+falcon-cli custom-ioa list --limit 10
+```
+
+| Command | Description |
+|---|---|
+| `ioa-exclusion` | Manage IOA exclusions |
+| `ioc` | Manage IOC indicators |
+| `iocs` | Manage IOCs (legacy) |
+| `ml-exclusion` | Manage ML exclusions |
+| `sv-exclusion` | Manage sensor visibility exclusions |
+| `cert-exclusion` | Manage certificate-based exclusions |
+| `custom-ioa` | Manage custom IOA rules |
+
+### Threat Intelligence
+
+```bash
+# List threat intelligence
+falcon-cli intel list --limit 10
+
+# Manage ThreatGraph
 falcon-cli threatgraph list
 ```
 
 | Command | Description |
 |---|---|
-| `event-stream` | Manage event streams |
-| `falcon-complete` | Manage Falcon Complete dashboard |
-| `overwatch` | Manage OverWatch dashboard |
-| `filevantage` | Manage FileVantage |
-| `firewall` | Manage firewall rules |
-| `discover` | Discover assets |
-| `identity` | Manage identity protection |
-| `zero-trust` | Manage Zero Trust assessments |
+| `intel` | Manage threat intelligence |
+| `intel-feed` | Manage intelligence feeds |
+| `intel-graph` | Manage intelligence indicator graph |
+| `tailored-intel` | Manage tailored intelligence |
 | `threatgraph` | Manage ThreatGraph |
+| `malquery` | Manage MalQuery |
 
-### Administration
-
-Commands for platform administration.
+### Sensor & Downloads
 
 ```bash
-# List users
-falcon-cli user list --limit 10
-
-# List workflows
-falcon-cli workflow list --limit 10
-
-# Get delivery settings
-falcon-cli delivery-setting get
+# List sensor downloads
+falcon-cli sensor-download list --limit 5
 ```
 
 | Command | Description |
 |---|---|
+| `sensor-download` | Manage sensor downloads |
+| `sensor-usage` | Manage sensor usage |
+| `install-token` | Manage installation tokens |
+| `download` | Manage downloads |
+| `deployment` | Manage deployments |
+
+### Scanning & Compliance
+
+```bash
+# List on-demand scans
+falcon-cli ods list --limit 10
+```
+
+| Command | Description |
+|---|---|
+| `quick-scan` | Manage quick scans |
+| `quick-scan-pro` | Manage quick scans (pro) |
+| `ods` | Manage on-demand scans |
+| `filevantage` | Manage FileVantage |
+| `datascanner` | Manage DataScanner |
+| `data-protection` | Manage data protection configuration |
+
+### Identity & Access
+
+```bash
+# List users
+falcon-cli user list --limit 10
+```
+
+| Command | Description |
+|---|---|
+| `identity` | Manage identity protection |
 | `user` | Manage users |
 | `oauth2` | Manage OAuth2 tokens |
+| `zero-trust` | Manage Zero Trust assessments |
+| `mobile` | Manage mobile enrollment |
 | `mssp` | Manage MSSP (Flight Control) |
+
+### Monitoring & Reporting
+
+```bash
+# List event streams
+falcon-cli event-stream list --limit 5
+
+# List workflows
+falcon-cli workflow list --limit 10
+```
+
+| Command | Description |
+|---|---|
+| `event-stream` | Manage event streams |
 | `message` | Manage message center |
-| `case` | Manage cases |
-| `workflow` | Manage workflows |
-| `scheduled-report` | Manage scheduled reports |
 | `report-execution` | Manage report executions |
-| `device-content` | Manage device content |
-| `deployment` | Manage deployments |
-| `delivery-setting` | Manage delivery settings |
-| `data-protection` | Manage data protection configuration |
-| `cert-exclusion` | Manage certificate-based exclusions |
+| `scheduled-report` | Manage scheduled reports |
+| `case` | Manage cases |
+| `falcon-complete` | Manage Falcon Complete dashboard |
+| `workflow` | Manage workflows |
+| `it-automation` | Manage IT automation |
 
-### Other
-
-Additional commands for various services.
+### Platform & Integration
 
 ```bash
 # List API integrations
 falcon-cli api-integration list --limit 10
 
-# List on-demand scans
-falcon-cli ods list --limit 10
+# Get delivery settings
+falcon-cli delivery-setting get
 ```
 
 | Command | Description |
@@ -409,19 +465,45 @@ falcon-cli ods list --limit 10
 | `correlation-rule` | Manage correlation rules |
 | `correlation-admin` | Manage correlation rules (admin) |
 | `custom-storage` | Manage custom storage |
-| `datascanner` | Manage DataScanner |
-| `download` | Manage downloads |
-| `faas` | Manage FaaS executions |
+| `delivery-setting` | Manage delivery settings |
 | `fdr` | Manage FDR |
+| `firewall` | Manage firewall rules |
 | `logscale` | Manage Foundry LogScale |
-| `it-automation` | Manage IT automation |
-| `mobile` | Manage mobile enrollment |
 | `ngsiem` | Manage NGSIEM |
-| `ods` | Manage on-demand scans |
-| `quick-scan` | Manage quick scans |
-| `quick-scan-pro` | Manage quick scans (pro) |
-| `saas-security` | Manage SaaS security |
 | `sample` | Manage sample uploads |
+| `saas-security` | Manage SaaS security |
+| `faas` | Manage FaaS executions |
+
+### Extended Commands
+
+Commands that combine multiple Falcon API calls into a single operation.
+
+```bash
+# Investigate automated-lead alerts
+falcon-cli automated-lead investigate --filter "status:'new'" --limit 5
+```
+
+| Command | Description |
+|---|---|
+| `automated-lead` | Investigate automated-lead alerts (multi-API) |
+
+### Shell Completion
+
+Generate completion scripts for your shell:
+
+```bash
+# Bash
+falcon-cli completion bash > /etc/bash_completion.d/falcon-cli
+
+# Zsh
+falcon-cli completion zsh > "${fpath[1]}/_falcon-cli"
+
+# Fish
+falcon-cli completion fish > ~/.config/fish/completions/falcon-cli.fish
+
+# PowerShell
+falcon-cli completion powershell > falcon-cli.ps1
+```
 
 ## Development
 
