@@ -124,7 +124,10 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
     };
 
     let auth = auth::Auth::new(config.clone());
-    let falcon = client::FalconClient::new(auth, config.base_url.clone());
+    let falcon = client::FalconClient::new(auth, config.base_url.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
 
     let result = dispatch::execute(&falcon, cli.command).await;
 
@@ -484,7 +487,10 @@ fn handle_agent_start(
     };
 
     let auth = auth::Auth::new(config_obj.clone());
-    let falcon = client::FalconClient::new(auth, config_obj.base_url.clone());
+    let falcon = client::FalconClient::new(auth, config_obj.base_url.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
     let falcon = Arc::new(falcon);
 
     let socket_path = match socket {

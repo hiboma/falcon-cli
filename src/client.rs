@@ -10,13 +10,23 @@ pub struct FalconClient {
 }
 
 impl FalconClient {
-    pub fn new(auth: Auth, base_url: String) -> Self {
+    pub fn new(auth: Auth, base_url: String) -> Result<Self> {
+        if !base_url.starts_with("https://")
+            && !base_url.starts_with("http://localhost")
+            && !base_url.starts_with("http://127.0.0.1")
+        {
+            return Err(FalconError::Config(format!(
+                "base_url must use HTTPS (got: {}). HTTP is only allowed for localhost and 127.0.0.1.",
+                base_url
+            )));
+        }
+
         let http = reqwest::Client::new();
-        Self {
+        Ok(Self {
             auth,
             http,
             base_url,
-        }
+        })
     }
 
     /// Send a GET request with automatic re-authentication on 401.
