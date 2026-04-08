@@ -11,10 +11,7 @@ pub struct FalconClient {
 
 impl FalconClient {
     pub fn new(auth: Auth, base_url: String) -> Result<Self> {
-        if !base_url.starts_with("https://")
-            && !base_url.starts_with("http://localhost")
-            && !base_url.starts_with("http://127.0.0.1")
-        {
+        if !base_url.starts_with("https://") && !Self::is_loopback_http(&base_url) {
             return Err(FalconError::Config(format!(
                 "base_url must use HTTPS (got: {}). HTTP is only allowed for localhost and 127.0.0.1.",
                 base_url
@@ -166,5 +163,49 @@ impl FalconClient {
 
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
+    }
+
+    fn is_loopback_http(url: &str) -> bool {
+        for prefix in &["http://localhost", "http://127.0.0.1"] {
+            if let Some(rest) = url.strip_prefix(prefix) {
+                if rest.is_empty() || rest.starts_with(':') || rest.starts_with('/') {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_loopback_http_localhost() {
+        assert!(FalconClient::is_loopback_http("http://localhost"));
+        assert!(FalconClient::is_loopback_http("http://localhost:8080"));
+        assert!(FalconClient::is_loopback_http("http://localhost/path"));
+    }
+
+    #[test]
+    fn test_is_loopback_http_127_0_0_1() {
+        assert!(FalconClient::is_loopback_http("http://127.0.0.1"));
+        assert!(FalconClient::is_loopback_http("http://127.0.0.1:9999"));
+        assert!(FalconClient::is_loopback_http("http://127.0.0.1/path"));
+    }
+
+    #[test]
+    fn test_is_loopback_http_rejects_subdomain_bypass() {
+        assert!(!FalconClient::is_loopback_http("http://localhost.evil.com"));
+        assert!(!FalconClient::is_loopback_http("http://127.0.0.1.evil.com"));
+    }
+
+    #[test]
+    fn test_is_loopback_http_rejects_non_loopback() {
+        assert!(!FalconClient::is_loopback_http("http://example.com"));
+        assert!(!FalconClient::is_loopback_http("https://localhost"));
+        assert!(!FalconClient::is_loopback_http("ftp://localhost"));
+        assert!(!FalconClient::is_loopback_http(""));
     }
 }
