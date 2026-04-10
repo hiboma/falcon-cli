@@ -26,6 +26,17 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Handle shell completion generation early (no auth, no agent, no tokio needed).
+    if let Command::Completion { shell } = cli.command {
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "falcon-cli",
+            &mut std::io::stdout(),
+        );
+        return;
+    }
+
     // Resolve credentials early (before fork).
     let credentials = FalconCredentials::resolve(
         cli.client_id.as_deref(),
@@ -85,17 +96,6 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
                 return;
             }
         }
-    }
-
-    // Handle shell completion generation.
-    if let Command::Completion { shell } = cli.command {
-        clap_complete::generate(
-            shell,
-            &mut Cli::command(),
-            "falcon-cli",
-            &mut std::io::stdout(),
-        );
-        return;
     }
 
     // Check profile restrictions before dispatching.
