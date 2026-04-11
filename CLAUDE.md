@@ -11,6 +11,7 @@ cargo build
 cargo test
 cargo fmt --check
 cargo clippy -- -D warnings
+cargo deny check
 ```
 
 ## Authentication
@@ -53,6 +54,7 @@ cargo clippy -- -D warnings
 - Pin all third-party actions by commit hash
 - Validate all user input strictly
 - Use `pull_request` (not `pull_request_target`)
+- Supply chain checks via `cargo-deny` (advisories, licenses, bans, sources) are enforced in CI. Policy lives in `deny.toml`.
 
 ## Testing
 

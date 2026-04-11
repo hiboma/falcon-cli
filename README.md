@@ -518,7 +518,10 @@ cargo build
 cargo test
 cargo fmt --check
 cargo clippy -- -D warnings
+cargo deny check
 ```
+
+`cargo deny check` enforces supply-chain policy (advisories, licenses, bans, sources) declared in `deny.toml`. Install the binary with `cargo install --locked cargo-deny` if it is not yet available locally.
 
 ## License
 
