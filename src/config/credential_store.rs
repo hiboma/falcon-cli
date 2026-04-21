@@ -2,6 +2,9 @@ use std::fmt;
 
 /// Service identifier used as the Keychain "service" attribute.
 /// Acts as a namespace so credentials do not collide with other apps.
+/// Only consumed by the macOS `KeychainStore` — on non-macOS builds
+/// there is no backend, so suppress the resulting dead-code warning.
+#[cfg(target_os = "macos")]
 pub const SERVICE: &str = "dev.falcon-cli";
 
 /// Logical identifier for the OAuth2 client_secret entry. This is the
@@ -9,6 +12,11 @@ pub const SERVICE: &str = "dev.falcon-cli";
 /// secret value itself.
 pub const KEY_CLIENT_SECRET: &str = "client_secret";
 
+/// On non-macOS builds the variants below are never constructed
+/// (there is no backend that would produce them). The trait still has
+/// to keep the type so the `read_secret_from_store` match is exhaustive
+/// on every target, hence the conditional allow.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug)]
 pub enum StoreError {
     /// The backend (e.g. Keychain) is not available on this platform.
