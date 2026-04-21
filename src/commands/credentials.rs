@@ -191,7 +191,7 @@ fn migrate(store: &dyn CredentialStore, dry_run: bool) -> Result<(), FalconError
     match mode {
         DisposalMode::Remove => {
             if let Err(e) = atomic_replace(&path, updated.as_bytes()) {
-                rollback_and_fail(store, &canonical, &e.to_string(), None)?;
+                rollback_and_fail(store, &canonical, &e.to_string())?;
             }
             println!("Removed client_secret line from {}", canonical.display());
             println!();
@@ -204,13 +204,13 @@ fn migrate(store: &dyn CredentialStore, dry_run: bool) -> Result<(), FalconError
             // an older one.
             let backup = backup_path(&path);
             if let Err(e) = write_secret_file(&backup, original.as_bytes(), true) {
-                rollback_and_fail(store, &canonical, &format!("{}", e), None)?;
+                rollback_and_fail(store, &canonical, &format!("{}", e))?;
             }
             if let Err(e) = atomic_replace(&path, updated.as_bytes()) {
                 // Try to remove the backup we just wrote, then roll back
                 // Keychain. The original toml is untouched.
                 let _ = fs::remove_file(&backup);
-                rollback_and_fail(store, &canonical, &e.to_string(), None)?;
+                rollback_and_fail(store, &canonical, &e.to_string())?;
             }
             println!(
                 "Removed client_secret line from {} (backup at {})",
@@ -279,11 +279,15 @@ fn prompt_disposal() -> Result<DisposalMode, FalconError> {
 /// have already written to the credential store. Rolls the Keychain entry
 /// back and returns a fully-formatted FalconError so the call site can
 /// short-circuit with `?`.
+///
+/// Call sites always delete any backup file they created before invoking
+/// rollback_and_fail, so there is no leftover backup path to surface —
+/// the plaintext location to advertise to the user is always the
+/// canonical toml path.
 fn rollback_and_fail(
     store: &dyn CredentialStore,
     canonical: &Path,
     cause: &str,
-    backup: Option<&Path>,
 ) -> Result<(), FalconError> {
     let rb = store.delete(KEY_CLIENT_SECRET);
     let rb_msg = match rb {
@@ -293,17 +297,12 @@ fn rollback_and_fail(
             re
         ),
     };
-    let extra = match backup {
-        Some(p) => format!(" Backup at {} also contains the plaintext.", p.display()),
-        None => String::new(),
-    };
     Err(FalconError::Config(format!(
-        "failed to update {}: {}. {}. The plaintext secret is still in {}.{}",
+        "failed to update {}: {}. {}. The plaintext secret is still in {}.",
         canonical.display(),
         cause,
         rb_msg,
         canonical.display(),
-        extra,
     )))
 }
 
@@ -353,27 +352,12 @@ fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn find_credentials_toml() -> Option<PathBuf> {
-    let candidates = credentials_search_paths();
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-fn credentials_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from(".falcon-credentials.toml")];
-    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
-        paths.push(
-            PathBuf::from(config_home)
-                .join("falcon-cli")
-                .join("credentials.toml"),
-        );
-    } else if let Ok(home) = std::env::var("HOME") {
-        paths.push(
-            PathBuf::from(home)
-                .join(".config")
-                .join("falcon-cli")
-                .join("credentials.toml"),
-        );
-    }
-    paths
+    // Delegate to the shared resolver in `config` so the migrate target
+    // and the resolve target cannot drift apart if the search paths are
+    // ever extended.
+    crate::config::credentials_search_paths()
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 fn backup_path(p: &Path) -> PathBuf {
@@ -452,6 +436,14 @@ fn extract_client_secret(content: &str) -> SecretScan {
 /// the empty string is an intentional override and wonder where the real
 /// value lives. A missing key makes the toml's role as "non-secret config"
 /// unambiguous.
+///
+/// INVARIANT: this function assumes `content` has already been vetted by
+/// `extract_client_secret` returning `SecretScan::Present(_)` — i.e. the
+/// `client_secret` value is a single-line basic string. If a future
+/// refactor ever calls `remove_client_secret_line` on a literal-string
+/// or multi-line value, it would silently strip the opening line and
+/// leave the rest dangling. Keep the `Unsupported` bail-out in migrate
+/// as the guard.
 fn remove_client_secret_line(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
     for line in content.lines() {
@@ -532,6 +524,39 @@ client_id = "c"
     fn extract_ignores_similarly_named_keys() {
         let s = "client_secret_extra = \"x\"\n";
         assert_eq!(extract_client_secret(s), SecretScan::Absent);
+    }
+
+    #[test]
+    fn extract_rejects_unterminated_basic_string() {
+        // Missing closing quote: we refuse rather than eat the rest of the
+        // file as if it were the value.
+        let s = "client_secret = \"abc\n";
+        assert!(matches!(
+            extract_client_secret(s),
+            SecretScan::Unsupported(_)
+        ));
+    }
+
+    #[test]
+    fn extract_rejects_escaped_quote_in_basic_string() {
+        // TOML allows `\"` inside basic strings, but we refuse those to
+        // avoid a half-correct parse that could truncate the secret at
+        // the first `"`.
+        let s = "client_secret = \"a\\\"b\"\n";
+        assert!(matches!(
+            extract_client_secret(s),
+            SecretScan::Unsupported(_)
+        ));
+    }
+
+    #[test]
+    fn extract_accepts_extra_whitespace_around_equals() {
+        // `key = value` with multiple spaces should still parse cleanly.
+        let s = "client_secret   =   \"abc\"\n";
+        assert_eq!(
+            extract_client_secret(s),
+            SecretScan::Present("abc".to_string())
+        );
     }
 
     #[test]

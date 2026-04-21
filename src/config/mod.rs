@@ -104,7 +104,9 @@ fn read_secret_from_store(store: Option<&dyn CredentialStore>, key: &str) -> Sto
 }
 
 /// Search paths for credentials.toml (highest priority first).
-fn credentials_search_paths() -> Vec<PathBuf> {
+/// Shared with the `credentials migrate` subcommand so the migrate target
+/// and the resolve target cannot drift apart.
+pub(crate) fn credentials_search_paths() -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from(".falcon-credentials.toml")];
     if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
         paths.push(
@@ -594,5 +596,74 @@ client_secret = "toml-secret"
         // from clear_falcon_env prevents a user-level toml from being read.
         let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
         assert!(creds.client_secret.is_none());
+    }
+
+    /// Security-critical invariant: when the credential store itself
+    /// reports a backend error (Keychain prompt denied, daemon down,
+    /// ACL mismatch), `resolve_with_store` must NOT fall back to a
+    /// plaintext secret in `credentials.toml`. Silently picking up a
+    /// stale toml value would defeat the point of migrating to the
+    /// Keychain in the first place.
+    #[test]
+    fn test_resolve_with_store_backend_error_does_not_fall_back_to_toml() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+
+        // Point XDG_CONFIG_HOME at a tempdir with a toml whose
+        // client_secret is populated — so we can prove it is *not* picked
+        // up when the store errors out.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join("falcon-cli");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("credentials.toml"),
+            r#"
+[credentials]
+client_secret = "toml-secret-should-not-be-used"
+"#,
+        )
+        .unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+        let store = credential_store::test_support::FailingStore;
+        let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
+        assert!(
+            creds.client_secret.is_none(),
+            "Backend error must short-circuit to None, not fall back to toml. \
+             got: client_secret={:?}",
+            creds.client_secret.as_ref().map(|_| "<masked>"),
+        );
+
+        unsafe { clear_falcon_env() };
+    }
+
+    /// Sanity check: an `Unavailable` error DOES fall through to the toml
+    /// (non-macOS builds, CI sandbox without a default keychain, etc.),
+    /// so the migration story works on platforms where the Keychain is
+    /// simply not present. This exercises the complementary half of the
+    /// StoreLookup split.
+    #[test]
+    fn test_resolve_with_none_store_falls_through_to_toml() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join("falcon-cli");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("credentials.toml"),
+            r#"
+[credentials]
+client_secret = "toml-secret"
+"#,
+        )
+        .unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+        // No store (simulates non-macOS `default_store() -> None`).
+        let creds = FalconCredentials::resolve_with_store(None, None, None, None);
+        assert_eq!(creds.client_secret.as_deref(), Some("toml-secret"));
+
+        unsafe { clear_falcon_env() };
     }
 }

@@ -87,6 +87,8 @@ echo "$FALCON_CLIENT_SECRET" | falcon-cli credentials set client-secret --stdin
 falcon-cli credentials status
 ```
 
+`--stdin` reads a single line and strips surrounding whitespace (leading and trailing ASCII + Unicode whitespace, including `\n` / `\r` / spaces / tabs). This defends against a stray trailing space pasted from a password manager silently corrupting the secret. If your `client_secret` can legitimately contain surrounding whitespace (unusual for CrowdStrike-issued values), use the interactive prompt instead.
+
 To migrate an existing plaintext `client_secret` from `credentials.toml` into the Keychain in one step:
 
 ```bash

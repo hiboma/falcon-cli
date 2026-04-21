@@ -207,6 +207,27 @@ pub mod test_support {
             Ok(())
         }
     }
+
+    /// `CredentialStore` whose `get` always returns `StoreError::Backend`.
+    /// Used to exercise the resolve path that must *not* fall through to
+    /// `credentials.toml` when the Keychain itself reports an access
+    /// failure (denied prompt, daemon down, ACL mismatch) — silently
+    /// picking up a stale plaintext secret would defeat the migration.
+    pub struct FailingStore;
+
+    impl CredentialStore for FailingStore {
+        fn get(&self, _key: &str) -> Result<Option<String>, StoreError> {
+            Err(StoreError::Backend("simulated backend failure".to_string()))
+        }
+
+        fn set(&self, _key: &str, _value: &str) -> Result<(), StoreError> {
+            Err(StoreError::Backend("simulated backend failure".to_string()))
+        }
+
+        fn delete(&self, _key: &str) -> Result<(), StoreError> {
+            Err(StoreError::Backend("simulated backend failure".to_string()))
+        }
+    }
 }
 
 #[cfg(test)]
