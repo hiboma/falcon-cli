@@ -239,5 +239,9 @@ pub async fn execute(client: &FalconClient, command: Command) -> error::Result<s
         Command::Profile { .. } => Err(crate::error::FalconError::Config(
             "profile command cannot be dispatched".to_string(),
         )),
+        // Credentials subcommand is handled in main.rs before dispatch.
+        Command::Credentials { .. } => Err(crate::error::FalconError::Config(
+            "credentials command cannot be dispatched".to_string(),
+        )),
     }
 }

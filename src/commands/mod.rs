@@ -27,6 +27,7 @@ pub mod container_vulnerabilities;
 pub mod content_update_policies;
 pub mod correlation_rules;
 pub mod correlation_rules_admin;
+pub mod credentials;
 pub mod cspm_registration;
 pub mod custom_ioa;
 pub mod custom_storage;

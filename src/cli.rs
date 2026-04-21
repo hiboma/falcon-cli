@@ -838,6 +838,27 @@ pub enum Command {
         action: AgentAction,
     },
 
+    // ── Credentials ──
+    /// Manage stored credentials (macOS Keychain)
+    #[command(
+        next_help_heading = "Configuration",
+        subcommand_required = true,
+        arg_required_else_help = true,
+        hide = true,
+        long_about = "Manage stored credentials (macOS Keychain).\n\
+                      \n\
+                      Secrets are stored in the login keychain under \
+                      service=\"dev.falcon-cli\". Inspect or delete via \
+                      Keychain Access.app or `security \
+                      find-generic-password -s dev.falcon-cli`. See README \
+                      for the full credential resolution order and \
+                      migration steps."
+    )]
+    Credentials {
+        #[command(subcommand)]
+        action: CredentialsCommand,
+    },
+
     // ── Profile ──
     /// Manage command profiles
     #[command(next_help_heading = "Configuration")]
@@ -845,6 +866,53 @@ pub enum Command {
         #[command(subcommand)]
         action: ProfileAction,
     },
+}
+
+/// Subcommands under `falcon-cli credentials`.
+#[derive(Subcommand, Debug)]
+pub enum CredentialsCommand {
+    /// Store a credential in the OS credential store (e.g. macOS Keychain).
+    #[command(arg_required_else_help = true)]
+    Set {
+        #[arg(value_enum)]
+        field: CredentialField,
+        /// Read the value from stdin instead of prompting interactively.
+        /// Useful for CI / automation. The value must be a single line.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Delete a credential from the OS credential store.
+    #[command(arg_required_else_help = true)]
+    Delete {
+        #[arg(value_enum)]
+        field: CredentialField,
+    },
+    /// Show whether each credential is stored. Values are never printed.
+    Status,
+    /// Migrate `client_secret` from credentials.toml into the OS credential store.
+    Migrate {
+        /// Show what would be done without modifying anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Credential fields supported by `falcon-cli credentials`.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum CredentialField {
+    /// OAuth2 client secret. Sensitive — stored only in the credential store.
+    ClientSecret,
+}
+
+impl CredentialField {
+    /// The logical key under which this field is stored in the credential
+    /// store. Returns a static identifier (e.g. "client_secret") — never
+    /// the credential value.
+    pub fn key(self) -> &'static str {
+        match self {
+            CredentialField::ClientSecret => crate::config::credential_store::KEY_CLIENT_SECRET,
+        }
+    }
 }
 
 /// Profile subcommand actions.

@@ -58,7 +58,91 @@ Set the following environment variables:
 
 CLI options (`--client-id`, `--base-url`, `--member-cid`) override environment variables.
 
-> **Note:** `FALCON_CLIENT_SECRET` has no CLI flag to prevent exposure in process lists. Use environment variables, `.env` files, or `credentials.toml`. Ensure these files have restrictive permissions (`chmod 600`).
+> **Note:** `FALCON_CLIENT_SECRET` has no CLI flag to prevent exposure in process lists. The recommended persistent store is the macOS Keychain (see below). Environment variables, `.env` files, and `credentials.toml` are still supported; ensure any on-disk file has restrictive permissions (`chmod 600`).
+
+### Credential storage (macOS Keychain)
+
+`falcon-cli` resolves the OAuth2 `client_secret` from the following sources, highest priority first:
+
+1. `FALCON_CLIENT_SECRET` environment variable
+2. **macOS Keychain** (login keychain, `service=dev.falcon-cli`, `account=client_secret`)
+3. `credentials.toml`, searched in this order:
+   1. `./.falcon-credentials.toml` (current working directory)
+   2. `$XDG_CONFIG_HOME/falcon-cli/credentials.toml` (falls back to `~/.config/falcon-cli/credentials.toml`)
+
+Storing the secret in the Keychain keeps it out of plaintext config files (and out of dotfile backups, Time Machine snapshots, accidental git commits, etc.).
+
+If the Keychain is available but returns a **backend error** (denied prompt, daemon down, ACL mismatch), `falcon-cli` deliberately refuses to fall back to `credentials.toml`. Silently picking up a stale plaintext value would defeat the point of moving the secret into the Keychain in the first place.
+
+#### Storing the secret
+
+```bash
+# Interactive prompt (recommended)
+falcon-cli credentials set client-secret
+
+# Non-interactive (CI / scripts)
+echo "$FALCON_CLIENT_SECRET" | falcon-cli credentials set client-secret --stdin
+
+# Confirm presence (the value is never printed)
+falcon-cli credentials status
+```
+
+To migrate an existing plaintext `client_secret` from `credentials.toml` into the Keychain in one step:
+
+```bash
+falcon-cli credentials migrate
+```
+
+`migrate` writes the secret to the Keychain and then offers to dispose of the plaintext copy:
+
+- **Recommended (default)**: the `client_secret` line is removed from the toml via an atomic temp-file rename. No plaintext copy remains on disk.
+- **Opt-in**: a 0o600 backup of the original toml is kept alongside the rewritten file. Choose this only if you need to roll back to the old setup.
+
+> ⚠️ **The opt-in backup still contains the plaintext secret.** A backup under `$HOME` is typically included in Time Machine / iCloud / rsync snapshots and defeats the point of moving the secret into the Keychain. Delete it as soon as you have confirmed the new setup works with `falcon-cli credentials status`.
+
+If the rewrite fails partway through, `migrate` rolls back the Keychain entry it just wrote so you are not left in a half-migrated state.
+
+#### Recovering from an interrupted migrate
+
+If you hit Ctrl-C (or your machine loses power) **between** the Keychain write and the toml rewrite, both copies of the secret exist: the new Keychain entry *and* the untouched `credentials.toml`. The process is idempotent — re-running `falcon-cli credentials migrate` on the same file will detect that the secret is still present in the toml and re-run the disposal step. Alternatively, if you want to bail out entirely, `falcon-cli credentials delete client-secret` removes the Keychain entry and the toml stays as it was.
+
+#### Inspecting the entry
+
+The entry lives in your **login** keychain as a `generic password`:
+
+| Attribute | Value |
+|---|---|
+| Kind | `application password` |
+| Service (Name / Where) | `dev.falcon-cli` |
+| Account | `client_secret` |
+
+GUI:
+
+```
+Keychain Access.app → login → Passwords → search "dev.falcon-cli"
+```
+
+CLI (metadata only):
+
+```bash
+security find-generic-password -s dev.falcon-cli -a client_secret
+```
+
+#### Removing the entry
+
+```bash
+falcon-cli credentials delete client-secret
+# or via macOS:
+security delete-generic-password -s dev.falcon-cli -a client_secret
+```
+
+#### Notes on Keychain prompts
+
+macOS shows an access-prompt dialog the first time `falcon-cli` reads the Keychain entry. Choosing **Always Allow** suppresses subsequent prompts.
+
+The dialog reappears whenever the binary's code signature changes — including after every `cargo install` rebuild. This is a macOS ACL behavior, not a `falcon-cli` bug.
+
+If a non-`falcon-cli` build of the binary keeps causing prompts, you can inspect the entry's Access Control list in Keychain Access.app and remove or replace the allowed-applications list.
 
 ### Credentials File (TOML)
 
@@ -67,7 +151,9 @@ You can configure credentials using a `credentials.toml` file. Files are loaded 
 1. `./.falcon-credentials.toml` (project-local)
 2. `$XDG_CONFIG_HOME/falcon-cli/credentials.toml` (default: `~/.config/falcon-cli/credentials.toml`)
 
-Priority: CLI arguments > environment variables > credentials.toml
+Priority for `client_id` / `base_url` / `member_cid`: CLI arguments > environment variables > credentials.toml.
+
+Priority for `client_secret`: `FALCON_CLIENT_SECRET` > macOS Keychain > credentials.toml. See [Credential storage (macOS Keychain)](#credential-storage-macos-keychain) above.
 
 Template:
 

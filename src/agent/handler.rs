@@ -189,5 +189,6 @@ fn classify_error(err: &crate::error::FalconError) -> (String, String) {
             ("json".to_string(), "response parsing failed".to_string())
         }
         crate::error::FalconError::Config(msg) => ("config".to_string(), msg.clone()),
+        crate::error::FalconError::InvalidInput(msg) => ("invalid_input".to_string(), msg.clone()),
     }
 }

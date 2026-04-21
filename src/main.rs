@@ -37,6 +37,18 @@ fn main() {
         return;
     }
 
+    // Handle credentials store management early. We skip resolve() entirely
+    // because resolve() consults the OS credential store, which may prompt
+    // or fail with an ACL error — the whole point of `credentials status`
+    // is to tell the user about the store, not to be polluted by it.
+    if let Command::Credentials { ref action } = cli.command {
+        if let Err(e) = commands::credentials::handle(action) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // Resolve credentials early (before fork).
     let credentials = FalconCredentials::resolve(
         cli.client_id.as_deref(),

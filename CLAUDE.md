@@ -17,17 +17,29 @@ cargo deny check
 ## Authentication
 
 - OAuth2 Client Credentials flow (POST /oauth2/token)
-- Priority: CLI options > environment variables
+- Priority for `client_id` / `base_url` / `member_cid`: CLI options > env vars > credentials.toml
+- Priority for `client_secret`: env var > macOS Keychain > credentials.toml
 - Tokens are held in memory only (no file persistence)
+- Recommended persistent store for `client_secret` is the macOS Keychain via `falcon-cli credentials set client-secret`
+- See `docs/adr/0005-keychain-backed-client-secret.md` for the resolve order, StoreError policy, and migrate flow
 
 ## Environment Variables
 
 - `FALCON_CLIENT_ID` - API client ID (required for direct mode)
-- `FALCON_CLIENT_SECRET` - API client secret (required for direct mode)
+- `FALCON_CLIENT_SECRET` - API client secret (optional; overrides Keychain when set)
 - `FALCON_BASE_URL` - Base URL (default: https://api.crowdstrike.com)
 - `FALCON_MEMBER_CID` - Member CID for MSSP (optional)
 - `FALCON_AGENT_SOCKET` - Agent Unix socket path (legacy, used by `--socket` flag)
 - `FALCON_AGENT_TOKEN` - Agent session token (legacy, triggers agent routing when set)
+
+## Credential Store (macOS Keychain)
+
+- Backend: `keyring` crate with `apple-native` feature
+- Keychain entry: `service=dev.falcon-cli`, `account=client_secret` in the login keychain
+- `StoreError::Unavailable` → falls through to `credentials.toml`
+- `StoreError::Backend` → does NOT fall through (prevents stale-toml override after Keychain migration)
+- `classify_keyring_err` downcasts to `security_framework::base::Error` and matches OSStatus `errSecNoDefaultKeychain` (-25307) / `errSecInvalidKeychain` (-25295), so locale-translated error messages (Japanese macOS etc.) still classify correctly
+- `falcon-cli credentials {set,delete,status,migrate}` manages entries; `get` is intentionally not provided to prevent AI-agent context leakage
 
 ## Agent Mode
 

@@ -3,6 +3,10 @@ use std::path::PathBuf;
 
 use crate::error::{FalconError, Result};
 
+pub mod credential_store;
+
+use credential_store::{default_store, CredentialStore, StoreError, KEY_CLIENT_SECRET};
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub client_id: String,
@@ -27,15 +31,76 @@ struct CredentialsFile {
 }
 
 /// Resolved Falcon API credentials collected from CLI args, environment variables,
-/// and credentials.toml.
+/// the OS credential store (macOS Keychain), and credentials.toml.
 /// Once constructed, the process should call `FalconCredentials::clear_env()` to remove
 /// credential environment variables so that forked child processes do not inherit them.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct FalconCredentials {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub base_url: String,
     pub member_cid: Option<String>,
+}
+
+/// Custom `Debug` impl that masks `client_secret` so that accidental `dbg!` /
+/// `{:?}` formatting cannot leak the secret into logs or error messages.
+impl std::fmt::Debug for FalconCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FalconCredentials")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &mask(&self.client_secret))
+            .field("base_url", &self.base_url)
+            .field("member_cid", &self.member_cid)
+            .finish()
+    }
+}
+
+fn mask(v: &Option<String>) -> &'static str {
+    match v {
+        Some(_) => "***",
+        None => "None",
+    }
+}
+
+/// Result of consulting the credential store for a secret.
+enum StoreLookup {
+    /// No store, or store backend not available (non-macOS build, etc.).
+    /// Caller should fall through to the next source.
+    SkipFallthrough,
+    /// Store reports the secret is not stored. Fall through to the next source.
+    NotStored,
+    /// Store returned the secret value.
+    Found(String),
+    /// Backend error (e.g. user denied the Keychain prompt, daemon down).
+    /// Caller MUST NOT fall through to credentials.toml — silently picking
+    /// up a stale plaintext secret would defeat the point of moving the
+    /// secret into the Keychain in the first place.
+    BackendError,
+}
+
+fn read_secret_from_store(store: Option<&dyn CredentialStore>, key: &str) -> StoreLookup {
+    let Some(store) = store else {
+        return StoreLookup::SkipFallthrough;
+    };
+    match store.get(key) {
+        Ok(Some(v)) => StoreLookup::Found(v),
+        Ok(None) => StoreLookup::NotStored,
+        Err(StoreError::Unavailable(msg)) => {
+            // `key` here is a static label like "client_secret", not the
+            // credential value. Log it for diagnostics.
+            eprintln!("warning: credential store unavailable for {}: {}", key, msg);
+            StoreLookup::SkipFallthrough
+        }
+        Err(StoreError::Backend(msg)) => {
+            eprintln!(
+                "error: credential store backend failure for {}: {}. \
+                 Refusing to fall back to credentials.toml — fix the store \
+                 access or unset the entry to make the toml fallback explicit.",
+                key, msg
+            );
+            StoreLookup::BackendError
+        }
+    }
 }
 
 /// Search paths for credentials.toml (highest priority first).
@@ -83,12 +148,38 @@ fn load_credentials_file() -> CredentialsFile {
 }
 
 impl FalconCredentials {
-    /// Resolve credentials from CLI args, environment variables, and credentials.toml.
-    /// Priority: CLI args > environment variables > credentials.toml > defaults.
+    /// Resolve credentials from CLI args, environment variables, the OS
+    /// credential store (macOS Keychain), and credentials.toml.
+    ///
+    /// Priority for `client_secret`:
+    ///   env var > Keychain > credentials.toml > None
+    /// Priority for `client_id` / `base_url` / `member_cid`:
+    ///   CLI args > env var > credentials.toml > defaults
+    ///
+    /// Keychain access may prompt the user (macOS) on first use. Backend
+    /// errors are reported on stderr and treated as "not stored" so we fall
+    /// through to the next source rather than aborting startup — except
+    /// that a Backend error explicitly *skips* the toml fallback, to avoid
+    /// silently picking up a stale plaintext secret.
     pub fn resolve(
         cli_client_id: Option<&str>,
         cli_base_url: Option<&str>,
         cli_member_cid: Option<&str>,
+    ) -> Self {
+        Self::resolve_with_store(
+            cli_client_id,
+            cli_base_url,
+            cli_member_cid,
+            default_store().as_deref(),
+        )
+    }
+
+    /// Like `resolve` but with an injectable credential store (used in tests).
+    pub fn resolve_with_store(
+        cli_client_id: Option<&str>,
+        cli_base_url: Option<&str>,
+        cli_member_cid: Option<&str>,
+        store: Option<&dyn CredentialStore>,
     ) -> Self {
         let file = load_credentials_file();
 
@@ -97,9 +188,17 @@ impl FalconCredentials {
             .or_else(|| std::env::var("FALCON_CLIENT_ID").ok())
             .or(file.client_id);
 
-        let client_secret = std::env::var("FALCON_CLIENT_SECRET")
-            .ok()
-            .or(file.client_secret);
+        let client_secret = std::env::var("FALCON_CLIENT_SECRET").ok().or_else(|| {
+            match read_secret_from_store(store, KEY_CLIENT_SECRET) {
+                StoreLookup::Found(v) => Some(v),
+                // Backend failures: do NOT fall back to plaintext toml.
+                // Surface the missing secret to the caller, which will turn
+                // into a "client_secret not set" error from validate().
+                StoreLookup::BackendError => None,
+                // Store skipped or empty: fall through to toml.
+                StoreLookup::SkipFallthrough | StoreLookup::NotStored => file.client_secret,
+            }
+        });
 
         let base_url = cli_base_url
             .map(String::from)
@@ -232,6 +331,12 @@ unsafe fn overwrite_environ_value(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Resolve-related tests mutate process-global env vars (HOME,
+    /// XDG_CONFIG_HOME, FALCON_*) which makes them order-dependent under
+    /// cargo test's default thread-pool. Serialize them with a shared mutex.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_falcon_credentials_validate_ok() {
@@ -298,6 +403,7 @@ mod tests {
 
     #[test]
     fn test_falcon_credentials_resolve_cli_overrides_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { clear_falcon_env() };
         unsafe {
             std::env::set_var("FALCON_CLIENT_ID", "env-id");
@@ -309,6 +415,7 @@ mod tests {
 
     #[test]
     fn test_falcon_credentials_resolve_env_fallback() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { clear_falcon_env() };
         unsafe {
             std::env::set_var("FALCON_CLIENT_ID", "env-id");
@@ -322,6 +429,7 @@ mod tests {
 
     #[test]
     fn test_falcon_credentials_resolve_default_base_url() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { clear_falcon_env() };
         let creds = FalconCredentials::resolve(None, None, None);
         assert_eq!(creds.base_url, "https://api.crowdstrike.com");
@@ -329,15 +437,20 @@ mod tests {
 
     #[test]
     fn test_falcon_credentials_resolve_empty() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { clear_falcon_env() };
         let creds = FalconCredentials::resolve(None, None, None);
         assert!(creds.client_id.is_none());
-        assert!(creds.client_secret.is_none());
+        // client_secret may come from the host's Keychain when running on
+        // a developer machine that has a real entry. We only assert the
+        // other fields; resolve_with_store tests below use MemoryStore to
+        // pin the Keychain path deterministically.
         assert!(creds.member_cid.is_none());
     }
 
     #[test]
     fn test_falcon_credentials_clear_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("FALCON_CLIENT_ID", "test-id");
             std::env::set_var("FALCON_CLIENT_SECRET", "test-secret");
@@ -410,6 +523,7 @@ client_secret = "toml-secret"
 
     #[test]
     fn test_falcon_credentials_resolve_then_clear_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("FALCON_CLIENT_ID", "env-id");
             std::env::set_var("FALCON_CLIENT_SECRET", "env-secret");
@@ -430,5 +544,55 @@ client_secret = "toml-secret"
         // But env vars are gone.
         assert!(std::env::var("FALCON_CLIENT_ID").is_err());
         assert!(std::env::var("FALCON_CLIENT_SECRET").is_err());
+    }
+
+    #[test]
+    fn test_debug_masks_client_secret() {
+        let creds = FalconCredentials {
+            client_id: Some("id".into()),
+            client_secret: Some("super-secret".into()),
+            base_url: "https://example.com".to_string(),
+            member_cid: Some("cid".into()),
+        };
+        let dbg = format!("{:?}", creds);
+        assert!(
+            !dbg.contains("super-secret"),
+            "client_secret leaked: {}",
+            dbg
+        );
+        assert!(dbg.contains("***"));
+    }
+
+    #[test]
+    fn test_resolve_with_store_uses_keychain_when_no_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+        let store = credential_store::test_support::MemoryStore::new();
+        store.set(KEY_CLIENT_SECRET, "kc-secret").unwrap();
+        let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
+        assert_eq!(creds.client_secret.as_deref(), Some("kc-secret"));
+    }
+
+    #[test]
+    fn test_resolve_with_store_env_overrides_keychain() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+        unsafe { std::env::set_var("FALCON_CLIENT_SECRET", "env-secret") };
+        let store = credential_store::test_support::MemoryStore::new();
+        store.set(KEY_CLIENT_SECRET, "kc-secret").unwrap();
+        let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
+        assert_eq!(creds.client_secret.as_deref(), Some("env-secret"));
+        unsafe { std::env::remove_var("FALCON_CLIENT_SECRET") };
+    }
+
+    #[test]
+    fn test_resolve_with_store_falls_back_to_none_when_empty() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+        let store = credential_store::test_support::MemoryStore::new();
+        // Both env and Keychain empty, and XDG_CONFIG_HOME=/nonexistent
+        // from clear_falcon_env prevents a user-level toml from being read.
+        let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
+        assert!(creds.client_secret.is_none());
     }
 }
