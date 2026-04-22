@@ -213,15 +213,44 @@ fn test_alert_update_help() {
 
 #[test]
 fn test_missing_credentials_error() {
-    let output = Command::new("cargo")
-        .args(["run", "--", "--no-agent", "host", "list"])
+    // Isolate the subprocess from the developer's real setup: a populated
+    // `~/.config/falcon-cli/credentials.toml`, a live agent `session.json`,
+    // or a `.falcon-credentials.toml` in the repo root would all let
+    // `resolve()` find a secret and defeat the "missing credentials"
+    // assertion.
+    //
+    //   - HOME              -> tempdir so `~/.config/falcon-cli/credentials.toml`
+    //                          is unreachable
+    //   - XDG_CONFIG_HOME   -> tempdir for the same reason
+    //   - current_dir       -> tempdir so `.falcon-credentials.toml` cannot be
+    //                          picked up
+    //   - FALCON_AGENT_SOCKET cleared alongside FALCON_AGENT_TOKEN
+    //
+    // We invoke the already-built test binary directly via
+    // `CARGO_BIN_EXE_<name>` (auto-populated by cargo for integration tests)
+    // rather than `cargo run`, so `current_dir` can be an arbitrary tempdir
+    // without cargo complaining about a missing Cargo.toml.
+    let home = tempfile::tempdir().expect("create home tempdir");
+    let cwd = tempfile::tempdir().expect("create cwd tempdir");
+    let bin = env!("CARGO_BIN_EXE_falcon-cli");
+
+    let output = Command::new(bin)
+        .args(["--no-agent", "host", "list"])
+        .current_dir(cwd.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
         .env_remove("FALCON_CLIENT_ID")
         .env_remove("FALCON_CLIENT_SECRET")
         .env_remove("FALCON_AGENT_TOKEN")
+        .env_remove("FALCON_AGENT_SOCKET")
         .output()
         .expect("failed to execute");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("FALCON_CLIENT_ID"));
+    assert!(
+        stderr.contains("FALCON_CLIENT_ID"),
+        "expected stderr to mention FALCON_CLIENT_ID, got: {}",
+        stderr
+    );
     assert!(!output.status.success());
 }
