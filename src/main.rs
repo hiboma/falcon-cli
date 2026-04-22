@@ -37,6 +37,18 @@ fn main() {
         return;
     }
 
+    // Handle credentials store management early. We skip resolve() entirely
+    // because resolve() consults the OS credential store, which may prompt
+    // or fail with an ACL error — the whole point of `credentials status`
+    // is to tell the user about the store, not to be polluted by it.
+    if let Command::Credentials { ref action } = cli.command {
+        if let Err(e) = commands::credentials::handle(action) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // Resolve credentials early (before fork).
     let credentials = FalconCredentials::resolve(
         cli.client_id.as_deref(),
@@ -449,13 +461,13 @@ fn print_filtered_help(ap: &profile::ActiveProfile) {
         println!("  {}", line);
     }
 
-    // Always show agent, profile, completion.
+    // Always show agent, credentials, profile, completion.
     println!();
     println!("Agent:");
     println!("  agent");
     println!();
     println!("Configuration:");
-    println!("  profile");
+    println!("  credentials, profile");
 
     println!();
     println!(
@@ -686,13 +698,15 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
     }
 }
 
-/// Get the total number of API commands (excluding agent, profile, completion).
+/// Get the total number of API commands (excluding agent, profile,
+/// credentials, completion — these are operational commands, not
+/// CrowdStrike API endpoints).
 fn total_command_count() -> usize {
     let cmd = Cli::command();
     cmd.get_subcommands()
         .filter(|s| {
             let name = s.get_name();
-            name != "agent" && name != "profile" && name != "completion"
+            name != "agent" && name != "profile" && name != "credentials" && name != "completion"
         })
         .count()
 }

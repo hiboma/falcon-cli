@@ -16,6 +16,9 @@ pub enum FalconError {
 
     #[error("configuration error: {0}")]
     Config(String),
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, FalconError>;
