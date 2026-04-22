@@ -70,7 +70,7 @@ Agent:
   agent
 
 Configuration:
-  profile
+  credentials, profile
 ";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -844,7 +844,6 @@ pub enum Command {
         next_help_heading = "Configuration",
         subcommand_required = true,
         arg_required_else_help = true,
-        hide = true,
         long_about = "Manage stored credentials (macOS Keychain).\n\
                       \n\
                       Secrets are stored in the login keychain under \

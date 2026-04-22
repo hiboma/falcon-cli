@@ -461,13 +461,13 @@ fn print_filtered_help(ap: &profile::ActiveProfile) {
         println!("  {}", line);
     }
 
-    // Always show agent, profile, completion.
+    // Always show agent, credentials, profile, completion.
     println!();
     println!("Agent:");
     println!("  agent");
     println!();
     println!("Configuration:");
-    println!("  profile");
+    println!("  credentials, profile");
 
     println!();
     println!(
@@ -698,13 +698,15 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
     }
 }
 
-/// Get the total number of API commands (excluding agent, profile, completion).
+/// Get the total number of API commands (excluding agent, profile,
+/// credentials, completion — these are operational commands, not
+/// CrowdStrike API endpoints).
 fn total_command_count() -> usize {
     let cmd = Cli::command();
     cmd.get_subcommands()
         .filter(|s| {
             let name = s.get_name();
-            name != "agent" && name != "profile" && name != "completion"
+            name != "agent" && name != "profile" && name != "credentials" && name != "completion"
         })
         .count()
 }
