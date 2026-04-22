@@ -62,6 +62,8 @@ CLI options (`--client-id`, `--base-url`, `--member-cid`) override environment v
 
 ### Credential storage (macOS Keychain)
 
+See [ADR-0005: Keychain による client_secret の保管](docs/adr/0005-keychain-backed-client-secret.md) for the full design rationale, including the `StoreError::{Unavailable, Backend}` fallthrough policy and the OSStatus-based `classify_keyring_err` decision.
+
 `falcon-cli` resolves the OAuth2 `client_secret` from the following sources, highest priority first:
 
 1. `FALCON_CLIENT_SECRET` environment variable

@@ -31,6 +31,17 @@ fn check_already_running() -> Option<u32> {
 ///
 /// The agent always uses `session.json` for cross-terminal auto-detection.
 /// Use `--foreground` to run without forking.
+///
+/// INVARIANT: the `credentials` argument is a fully resolved
+/// `FalconCredentials` struct. The parent process has already consulted
+/// the OS credential store (macOS Keychain) if necessary; the forked
+/// child MUST NOT touch the store again. Every child-side code path
+/// that needs `client_secret` reads it from this in-memory struct (via
+/// `self.config.client_secret` in `Auth::refresh_token`). Re-reading
+/// the Keychain from the child would: (1) re-trigger an ACL prompt in a
+/// context with no TTY (silent failure), (2) widen the set of binaries
+/// whose code signature the user must trust, and (3) break the
+/// single-resolve guarantee documented in ADR-0005.
 pub fn start(
     falcon_client: Arc<crate::client::FalconClient>,
     socket_path: &Path,
