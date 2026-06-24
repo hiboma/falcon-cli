@@ -70,7 +70,7 @@ Agent:
   agent
 
 Configuration:
-  credentials, profile
+  credentials, profile, doctor
 ";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -865,6 +865,20 @@ pub enum Command {
         #[command(subcommand)]
         action: ProfileAction,
     },
+
+    // ── Doctor ──
+    /// Diagnose configuration, credential resolution, and connectivity
+    #[command(
+        next_help_heading = "Configuration",
+        long_about = "Diagnose configuration, credential resolution, and connectivity.\n\
+                      \n\
+                      Reports which config files exist, where each credential \
+                      resolves from (CLI / env / Keychain / credentials.toml), \
+                      the state of every FALCON_* environment variable, and the \
+                      result of a live OAuth2 token request against base_url. \
+                      Secret values are never printed."
+    )]
+    Doctor,
 }
 
 /// Subcommands under `falcon-cli credentials`.
