@@ -242,6 +242,24 @@ commands = ["*"]
 
 Priority: `--profile` flag > `FALCON_PROFILE` env > `default_profile` in config
 
+### Diagnostics (`doctor`)
+
+`falcon-cli doctor` reports the state of your local configuration and verifies connectivity, without ever printing secret values. Use it to debug "why does falcon-cli not authenticate?".
+
+```bash
+falcon-cli doctor
+```
+
+It prints five sections:
+
+- **CONFIG** — which config files exist on disk (profile config and credentials file), with the searched paths when none are found.
+- **RESOLVED CREDENTIALS** — where each credential resolved from (`cli flag` / `env var` / `keychain` / `credentials.toml` / `built-in default`). `client_id` is shown as `set` / `(unresolved)` and `client_secret` as `stored` / `(unresolved)`; their values are never printed. `base_url` and `member_cid` (non-secret) show their values.
+- **ACTIVE PROFILE** — the resolved profile, its source, and how many commands it allows.
+- **ENVIRONMENT** — every `FALCON_*` variable. Sensitive variables (`FALCON_CLIENT_ID`, `FALCON_CLIENT_SECRET`, `FALCON_AGENT_TOKEN`) show only `(set)` / `(unset)`; non-secret variables show their value.
+- **CONNECTIVITY** — a live OAuth2 client-credentials token request against `base_url`. This is the same call the CLI makes on every command, so a successful result means auth works end to end. The probe is skipped when `client_id` / `client_secret` do not both resolve.
+
+> The output is safe to paste into an issue or chat: no secret value (`client_id`, `client_secret`, or agent token) is ever included. Like `credentials status`, `doctor` reads the macOS Keychain and may prompt on first use.
+
 ## Agent Mode
 
 The credential agent isolates API credentials in a separate process. This enables LLM agents (e.g., Claude Code) to use falcon-cli without direct access to secrets. Credentials are resolved into an in-memory struct before fork, and `FALCON_*` environment variables are cleared from the process to prevent leakage via `/proc/<pid>/environ`.
