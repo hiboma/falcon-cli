@@ -136,13 +136,11 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
     // for the secret, and we also need its result to attribute the secret's
     // source — so we wrap the real store in a recording proxy and reuse the
     // captured lookup, rather than calling `store.get()` a second time (which
-    // would risk a second macOS Keychain prompt).
+    // would risk a second macOS Keychain prompt). `recorder` is Some exactly
+    // when `store` is Some, so the recorder is the only probe we ever pass.
     let store = default_store();
     let recorder = store.as_deref().map(RecordingStore::new);
-    let probe: Option<&dyn CredentialStore> = recorder
-        .as_ref()
-        .map(|r| r as &dyn CredentialStore)
-        .or(store.as_deref());
+    let probe: Option<&dyn CredentialStore> = recorder.as_ref().map(|r| r as &dyn CredentialStore);
 
     let creds = FalconCredentials::resolve_with_store(
         input.cli_client_id,
@@ -151,12 +149,14 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
         probe,
     );
 
+    // Parse credentials.toml once and reuse the presence flags for every field,
+    // rather than re-reading + re-parsing the file per field.
+    let toml = load_credentials_toml_view();
+    let toml_has = |present: fn(&CredsTomlView) -> bool| toml.as_ref().is_some_and(present);
+
     // client_id: precedence CLI > env > toml.
-    let id_source = resolve_source_plain(
-        "--client-id",
-        "FALCON_CLIENT_ID",
-        toml_field(|f| f.client_id),
-    );
+    let id_source =
+        resolve_source_plain("--client-id", "FALCON_CLIENT_ID", toml_has(|f| f.client_id));
     print_masked_field("client-id", creds.client_id.is_some(), id_source);
 
     // client_secret: precedence env > Keychain > toml. This is the most common
@@ -166,7 +166,7 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
         .as_ref()
         .and_then(|r| r.last_secret_outcome())
         .unwrap_or(KeychainOutcome::Skipped);
-    let secret_source = secret_source(secret_keychain, toml_field(|f| f.client_secret));
+    let secret_source = secret_source(secret_keychain, toml_has(|f| f.client_secret));
     print_secret_field(
         "client-secret",
         creds.client_secret.is_some(),
@@ -176,7 +176,7 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
     // base_url: precedence CLI > env > toml > built-in default. Always
     // resolves to something, so we can show the value (it is not a secret).
     let url_source =
-        resolve_source_plain("--base-url", "FALCON_BASE_URL", toml_field(|f| f.base_url));
+        resolve_source_plain("--base-url", "FALCON_BASE_URL", toml_has(|f| f.base_url));
     let url_source = url_source.unwrap_or(Source::Default);
     print_field(
         "base-url",
@@ -187,7 +187,7 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
     let cid_source = resolve_source_plain(
         "--member-cid",
         "FALCON_MEMBER_CID",
-        toml_field(|f| f.member_cid),
+        toml_has(|f| f.member_cid),
     );
     match (&creds.member_cid, cid_source) {
         (Some(cid), Some(src)) => print_field("member-cid", &format!("{}  ({})", cid, src.label())),
@@ -360,19 +360,10 @@ fn print_field(name: &str, value: &str) {
 
 // ── credentials.toml probing ─────────────────────────────────────────────────
 
-/// Re-read credentials.toml and test a field for presence without exposing the
-/// value. We re-parse here (rather than reuse the private loader in `config`)
-/// so doctor can attribute *which source* a value came from independently of
-/// the resolved result.
-fn toml_field(selector: impl Fn(&CredsTomlView) -> bool) -> bool {
-    let Some(view) = load_credentials_toml_view() else {
-        return false;
-    };
-    selector(&view)
-}
-
 /// A presence-only view of credentials.toml. Booleans only — we never retain
-/// the secret value.
+/// the secret value. doctor parses the file once into this view and reads each
+/// field's presence flag, so it can attribute *which source* a value came from
+/// independently of the resolved result without re-reading the file per field.
 struct CredsTomlView {
     client_id: bool,
     client_secret: bool,
@@ -472,15 +463,15 @@ fn report_environment() {
     ];
 
     for (name, is_sensitive) in vars {
+        // Treat an empty value as "set", matching FalconCredentials::resolve
+        // (which uses std::env::var(..).ok() and so adopts an empty string).
+        // Reporting empty as "(unset)" here would contradict the RESOLVED
+        // section, which attributes the value to the env var.
         match std::env::var(name) {
-            Ok(v) if !v.is_empty() => {
-                if *is_sensitive {
-                    println!("  {:<22} (set)", name);
-                } else {
-                    println!("  {:<22} {}", name, v);
-                }
-            }
-            _ => println!("  {:<22} (unset)", name),
+            Ok(_) if *is_sensitive => println!("  {:<22} (set)", name),
+            Ok(v) if v.is_empty() => println!("  {:<22} (set, empty)", name),
+            Ok(v) => println!("  {:<22} {}", name, v),
+            Err(_) => println!("  {:<22} (unset)", name),
         }
     }
 }
