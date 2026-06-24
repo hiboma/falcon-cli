@@ -19,7 +19,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::config::credential_store::{default_store, CredentialStore, KEY_CLIENT_SECRET};
+use crate::config::credential_store::{
+    default_store, CredentialStore, StoreError, KEY_CLIENT_SECRET,
+};
 use crate::config::{credentials_search_paths, FalconCredentials};
 
 /// Where a resolved value originated. Mirrors the precedence order in
@@ -130,12 +132,23 @@ fn print_file_group(label: &str, paths: &[PathBuf]) {
 fn report_resolved(input: &DoctorInput) -> FalconCredentials {
     println!("RESOLVED CREDENTIALS");
 
+    // Read the credential store exactly once. `resolve_with_store` consults it
+    // for the secret, and we also need its result to attribute the secret's
+    // source — so we wrap the real store in a recording proxy and reuse the
+    // captured lookup, rather than calling `store.get()` a second time (which
+    // would risk a second macOS Keychain prompt).
     let store = default_store();
+    let recorder = store.as_deref().map(RecordingStore::new);
+    let probe: Option<&dyn CredentialStore> = recorder
+        .as_ref()
+        .map(|r| r as &dyn CredentialStore)
+        .or(store.as_deref());
+
     let creds = FalconCredentials::resolve_with_store(
         input.cli_client_id,
         input.cli_base_url,
         input.cli_member_cid,
-        store.as_deref(),
+        probe,
     );
 
     // client_id: precedence CLI > env > toml.
@@ -146,9 +159,14 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
     );
     print_masked_field("client-id", creds.client_id.is_some(), id_source);
 
-    // client_secret: precedence env > Keychain > toml. This is the most
-    // common failure point, so be explicit about each layer.
-    let secret_source = resolve_secret_source(store.as_deref());
+    // client_secret: precedence env > Keychain > toml. This is the most common
+    // failure point, so be explicit about each layer. We reuse the Keychain
+    // result captured during resolve above instead of probing a second time.
+    let secret_keychain = recorder
+        .as_ref()
+        .and_then(|r| r.last_secret_outcome())
+        .unwrap_or(KeychainOutcome::Skipped);
+    let secret_source = secret_source(secret_keychain, toml_field(|f| f.client_secret));
     print_secret_field(
         "client-secret",
         creds.client_secret.is_some(),
@@ -186,10 +204,15 @@ fn report_resolved(input: &DoctorInput) -> FalconCredentials {
 /// raw argv to tell a CLI flag apart from an env var: clap merges both into the
 /// same parsed field via `#[arg(env = ...)]`, so the parsed value alone cannot
 /// distinguish "passed on the command line" from "read from the environment".
+///
+/// An empty env var (`FALCON_CLIENT_ID=`) counts as "set" here, matching
+/// `FalconCredentials::resolve`, which uses `std::env::var(..).ok()` and so
+/// adopts an empty string rather than falling through to toml. doctor must
+/// report the same provenance the real resolve would pick.
 fn resolve_source_plain(cli_flag: &str, env_key: &str, toml_present: bool) -> Option<Source> {
     if cli_flag_present(cli_flag) {
         Some(Source::Cli)
-    } else if std::env::var(env_key).is_ok_and(|v| !v.is_empty()) {
+    } else if std::env::var(env_key).is_ok() {
         Some(Source::Env)
     } else if toml_present {
         Some(Source::Toml)
@@ -211,23 +234,100 @@ fn flag_present_in<I: IntoIterator<Item = String>>(args: I, flag: &str) -> bool 
         .any(|a| a == flag || a.starts_with(&prefix))
 }
 
-/// Determine the source of `client_secret`: env > Keychain > toml.
-fn resolve_secret_source(store: Option<&dyn CredentialStore>) -> Source {
-    if std::env::var("FALCON_CLIENT_SECRET").is_ok_and(|v| !v.is_empty()) {
+/// Outcome of consulting the credential store for `client_secret`, captured
+/// once during resolve and reused so doctor never probes the Keychain twice.
+/// The split between `Unavailable` and `BackendError` mirrors `StoreError`'s
+/// two variants, because `resolve` treats them differently (one falls through
+/// to toml, the other does not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeychainOutcome {
+    /// No store consulted (non-macOS build, or store was None).
+    Skipped,
+    /// Store returned a secret.
+    Found,
+    /// Store reports the secret is not stored.
+    NotStored,
+    /// Store as a whole is not present (CI sandbox without a default keychain,
+    /// non-macOS). `resolve` falls through to toml in this case.
+    Unavailable,
+    /// Store backend access failure (denied prompt, daemon down, ACL mismatch).
+    /// `resolve` does NOT fall through to toml in this case.
+    BackendError,
+}
+
+/// Determine the source of `client_secret`, reproducing the exact precedence in
+/// `FalconCredentials::resolve`: env (incl. empty) > Keychain > toml.
+///
+/// The two Keychain error kinds diverge, matching `config::read_secret_from_store`
+/// (ADR 0005): an `Unavailable` store falls through to toml (the migration story
+/// must work where no Keychain exists), while a `BackendError` short-circuits to
+/// `Unset` — falling back to a stale plaintext toml secret would defeat the
+/// point of moving the secret into the Keychain.
+fn secret_source(keychain: KeychainOutcome, toml_present: bool) -> Source {
+    if std::env::var("FALCON_CLIENT_SECRET").is_ok() {
         return Source::Env;
     }
-    // Probe the store. We only care presence vs absence here; backend errors
-    // are surfaced separately by `credentials status`, so for doctor we treat
-    // any successful Some as keychain-sourced.
-    if let Some(store) = store {
-        if let Ok(Some(_)) = store.get(KEY_CLIENT_SECRET) {
-            return Source::Keychain;
+    match keychain {
+        KeychainOutcome::Found => Source::Keychain,
+        KeychainOutcome::BackendError => Source::Unset,
+        KeychainOutcome::Skipped | KeychainOutcome::NotStored | KeychainOutcome::Unavailable => {
+            if toml_present {
+                Source::Toml
+            } else {
+                Source::Unset
+            }
         }
     }
-    if toml_field(|f| f.client_secret) {
-        return Source::Toml;
+}
+
+/// A `CredentialStore` that wraps the real store and records the outcome of the
+/// last `get(client_secret)` call. This lets doctor consult the Keychain a
+/// single time — `resolve_with_store` reads through it, and we then inspect the
+/// captured outcome to attribute the secret's source, instead of issuing a
+/// second `get()` (which on macOS could trigger a second access prompt).
+struct RecordingStore<'a> {
+    inner: &'a dyn CredentialStore,
+    last_secret: std::cell::Cell<Option<KeychainOutcome>>,
+}
+
+impl<'a> RecordingStore<'a> {
+    fn new(inner: &'a dyn CredentialStore) -> Self {
+        Self {
+            inner,
+            last_secret: std::cell::Cell::new(None),
+        }
     }
-    Source::Unset
+
+    /// The outcome of the most recent `get(client_secret)`, if any happened.
+    fn last_secret_outcome(&self) -> Option<KeychainOutcome> {
+        self.last_secret.get()
+    }
+}
+
+impl CredentialStore for RecordingStore<'_> {
+    fn get(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let result = self.inner.get(key);
+        if key == KEY_CLIENT_SECRET {
+            let outcome = match &result {
+                Ok(Some(_)) => KeychainOutcome::Found,
+                Ok(None) => KeychainOutcome::NotStored,
+                // Distinguish the two error kinds: resolve falls through to toml
+                // for Unavailable but not for Backend (see secret_source).
+                Err(StoreError::Unavailable(_)) => KeychainOutcome::Unavailable,
+                Err(StoreError::Backend(_)) => KeychainOutcome::BackendError,
+            };
+            self.last_secret.set(Some(outcome));
+        }
+        result
+    }
+
+    fn set(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        self.inner.set(key, value)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), StoreError> {
+        self.inner.delete(key)
+    }
 }
 
 /// Render a non-secret-but-still-masked field (client_id). We show only
@@ -509,5 +609,116 @@ client_secret = ""
     #[test]
     fn parse_creds_view_invalid_toml_is_none() {
         assert!(parse_creds_view("this is = not = valid toml [[[").is_none());
+    }
+
+    // `secret_source` reads FALCON_CLIENT_SECRET, a process-global. Serialize
+    // these cases and clear the var around each so they cannot race.
+    static SECRET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_secret_env_cleared<F: FnOnce()>(f: F) {
+        let _guard = SECRET_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("FALCON_CLIENT_SECRET").ok();
+        unsafe { std::env::remove_var("FALCON_CLIENT_SECRET") };
+        f();
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("FALCON_CLIENT_SECRET", v),
+                None => std::env::remove_var("FALCON_CLIENT_SECRET"),
+            }
+        }
+    }
+
+    #[test]
+    fn secret_source_env_wins_even_when_empty() {
+        let _guard = SECRET_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("FALCON_CLIENT_SECRET").ok();
+        // Empty env var still counts as "set" (matches resolve's `.ok()`).
+        unsafe { std::env::set_var("FALCON_CLIENT_SECRET", "") };
+        assert_eq!(secret_source(KeychainOutcome::Found, true), Source::Env);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("FALCON_CLIENT_SECRET", v),
+                None => std::env::remove_var("FALCON_CLIENT_SECRET"),
+            }
+        }
+    }
+
+    #[test]
+    fn secret_source_keychain_found() {
+        with_secret_env_cleared(|| {
+            assert_eq!(
+                secret_source(KeychainOutcome::Found, true),
+                Source::Keychain
+            );
+        });
+    }
+
+    #[test]
+    fn secret_source_backend_error_does_not_fall_back_to_toml() {
+        with_secret_env_cleared(|| {
+            // Even with a toml secret present, a Keychain backend error must
+            // report Unset — resolve refuses the toml fallback (ADR 0005).
+            assert_eq!(
+                secret_source(KeychainOutcome::BackendError, true),
+                Source::Unset
+            );
+        });
+    }
+
+    #[test]
+    fn secret_source_falls_through_to_toml() {
+        with_secret_env_cleared(|| {
+            assert_eq!(
+                secret_source(KeychainOutcome::NotStored, true),
+                Source::Toml
+            );
+            assert_eq!(secret_source(KeychainOutcome::Skipped, true), Source::Toml);
+            // An Unavailable store (no default keychain) also falls through, so
+            // the migration story works where no Keychain exists.
+            assert_eq!(
+                secret_source(KeychainOutcome::Unavailable, true),
+                Source::Toml
+            );
+        });
+    }
+
+    #[test]
+    fn secret_source_unset_when_nothing_resolves() {
+        with_secret_env_cleared(|| {
+            assert_eq!(
+                secret_source(KeychainOutcome::NotStored, false),
+                Source::Unset
+            );
+        });
+    }
+
+    #[test]
+    fn recording_store_captures_secret_outcome() {
+        use crate::config::credential_store::test_support::MemoryStore;
+        let mem = MemoryStore::new();
+        mem.set(KEY_CLIENT_SECRET, "v").unwrap();
+        let rec = RecordingStore::new(&mem);
+        assert_eq!(rec.last_secret_outcome(), None);
+        let _ = rec.get(KEY_CLIENT_SECRET);
+        assert_eq!(rec.last_secret_outcome(), Some(KeychainOutcome::Found));
+
+        let empty = MemoryStore::new();
+        let rec2 = RecordingStore::new(&empty);
+        let _ = rec2.get(KEY_CLIENT_SECRET);
+        assert_eq!(rec2.last_secret_outcome(), Some(KeychainOutcome::NotStored));
+    }
+
+    #[test]
+    fn recording_store_maps_backend_error() {
+        use crate::config::credential_store::test_support::FailingStore;
+        let failing = FailingStore;
+        let rec = RecordingStore::new(&failing);
+        let _ = rec.get(KEY_CLIENT_SECRET);
+        // FailingStore returns StoreError::Backend, which must map to
+        // BackendError (no toml fallback), not Unavailable.
+        assert_eq!(
+            rec.last_secret_outcome(),
+            Some(KeychainOutcome::BackendError)
+        );
     }
 }
