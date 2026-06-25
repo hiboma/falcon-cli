@@ -243,5 +243,9 @@ pub async fn execute(client: &FalconClient, command: Command) -> error::Result<s
         Command::Credentials { .. } => Err(crate::error::FalconError::Config(
             "credentials command cannot be dispatched".to_string(),
         )),
+        // Doctor is handled in main.rs before dispatch.
+        Command::Doctor => Err(crate::error::FalconError::Config(
+            "doctor command cannot be dispatched".to_string(),
+        )),
     }
 }

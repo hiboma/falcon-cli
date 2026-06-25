@@ -49,6 +49,23 @@ fn main() {
         return;
     }
 
+    // Handle `doctor` before the pre-fork resolve(). doctor performs its own
+    // credential resolution (so it can report provenance) and a live
+    // connectivity probe, so it needs the tokio runtime but must bypass agent
+    // routing and profile gating — those are things doctor reports on, not
+    // things that should gate it. Running resolve() here too would consult the
+    // Keychain twice (one extra macOS prompt), so we skip it for doctor.
+    if let Command::Doctor = cli.command {
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(commands::doctor::run(commands::doctor::DoctorInput {
+            cli_client_id: cli.client_id.as_deref(),
+            cli_base_url: cli.base_url.as_deref(),
+            cli_member_cid: cli.member_cid.as_deref(),
+            cli_profile: cli.profile.as_deref(),
+        }));
+        return;
+    }
+
     // Resolve credentials early (before fork).
     let credentials = FalconCredentials::resolve(
         cli.client_id.as_deref(),
@@ -467,7 +484,7 @@ fn print_filtered_help(ap: &profile::ActiveProfile) {
     println!("  agent");
     println!();
     println!("Configuration:");
-    println!("  credentials, profile");
+    println!("  credentials, profile, doctor");
 
     println!();
     println!(
@@ -699,14 +716,18 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
 }
 
 /// Get the total number of API commands (excluding agent, profile,
-/// credentials, completion — these are operational commands, not
+/// credentials, completion, doctor — these are operational commands, not
 /// CrowdStrike API endpoints).
 fn total_command_count() -> usize {
     let cmd = Cli::command();
     cmd.get_subcommands()
         .filter(|s| {
             let name = s.get_name();
-            name != "agent" && name != "profile" && name != "credentials" && name != "completion"
+            name != "agent"
+                && name != "profile"
+                && name != "credentials"
+                && name != "completion"
+                && name != "doctor"
         })
         .count()
 }

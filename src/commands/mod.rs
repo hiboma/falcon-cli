@@ -40,6 +40,7 @@ pub mod detects;
 pub mod device_content;
 pub mod device_control_policies;
 pub mod discover;
+pub mod doctor;
 pub mod downloads;
 pub mod drift_indicators;
 pub mod event_streams;
