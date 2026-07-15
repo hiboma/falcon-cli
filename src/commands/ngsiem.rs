@@ -7,7 +7,7 @@ use crate::client::FalconClient;
 use crate::commands::{build_query_path, encode};
 use crate::error::{FalconError, Result};
 
-const SEARCH_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+const SEARCH_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Subcommand, Debug)]
 pub enum Action {
@@ -85,6 +85,19 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
     }
 }
 
+/// Reject repository names that would escape the intended URL path.
+/// `.` and `..` survive percent-encoding as-is and are collapsed as
+/// dot segments when the URL is parsed.
+fn validate_repository(repository: &str) -> Result<()> {
+    if repository.is_empty() || repository == "." || repository == ".." {
+        return Err(FalconError::InvalidInput(format!(
+            "invalid repository name: {:?}",
+            repository
+        )));
+    }
+    Ok(())
+}
+
 /// Start a query job, poll until it completes, and return the final result.
 async fn search(
     client: &FalconClient,
@@ -94,6 +107,8 @@ async fn search(
     end: Option<&str>,
     timeout: u64,
 ) -> Result<serde_json::Value> {
+    validate_repository(repository)?;
+
     let mut body = json!({
         "queryString": query,
         "start": start,
@@ -108,20 +123,29 @@ async fn search(
         encode(repository)
     );
     let job = client.post(&jobs_path, &body).await?;
-    let id = job["id"]
-        .as_str()
-        .ok_or_else(|| FalconError::Api(format!("queryjob id missing in response: {}", job)))?;
+    let id = job["id"].as_str().ok_or_else(|| {
+        let truncated: String = job.to_string().chars().take(200).collect();
+        FalconError::Api(format!("queryjob id missing in response: {}", truncated))
+    })?;
     let job_path = format!("{}/{}", jobs_path, encode(id));
 
-    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let started = Instant::now();
+    let limit = Duration::from_secs(timeout);
     loop {
-        let result = client.get(&job_path).await?;
+        let result = match client.get(&job_path).await {
+            Ok(result) => result,
+            Err(e) => {
+                // Do not leave the job running server-side.
+                let _ = client.delete(&job_path).await;
+                return Err(e);
+            }
+        };
         if result["done"].as_bool().unwrap_or(false) {
             // Free server-side resources; the result is already in hand.
             let _ = client.delete(&job_path).await;
             return Ok(result);
         }
-        if Instant::now() >= deadline {
+        if started.elapsed() >= limit {
             let _ = client.delete(&job_path).await;
             return Err(FalconError::Api(format!(
                 "search did not complete within {}s (job id: {})",
@@ -129,5 +153,23 @@ async fn search(
             )));
         }
         tokio::time::sleep(SEARCH_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_repository_accepts_normal_names() {
+        assert!(validate_repository("search-all").is_ok());
+        assert!(validate_repository("my.repo").is_ok());
+    }
+
+    #[test]
+    fn test_validate_repository_rejects_dot_segments() {
+        assert!(validate_repository("").is_err());
+        assert!(validate_repository(".").is_err());
+        assert!(validate_repository("..").is_err());
     }
 }
