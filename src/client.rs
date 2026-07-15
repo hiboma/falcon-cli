@@ -141,9 +141,16 @@ impl FalconClient {
         let body = resp.text().await?;
 
         if !status.is_success() {
-            let mut truncated = body.clone();
-            truncated.truncate(200);
-            return Err(FalconError::Api(format!("{}: {}", status, truncated)));
+            return Err(FalconError::Api(format!(
+                "{}: {}",
+                status,
+                Self::truncate_chars(&body, 200)
+            )));
+        }
+
+        // 204 No Content and other empty success bodies are not JSON.
+        if body.is_empty() {
+            return Ok(serde_json::Value::Null);
         }
 
         let value: serde_json::Value = serde_json::from_str(&body)?;
@@ -155,13 +162,21 @@ impl FalconClient {
 
         if !status.is_success() {
             let body = resp.text().await?;
-            let mut truncated = body;
-            truncated.truncate(200);
-            return Err(FalconError::Api(format!("{}: {}", status, truncated)));
+            return Err(FalconError::Api(format!(
+                "{}: {}",
+                status,
+                Self::truncate_chars(&body, 200)
+            )));
         }
 
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
+    }
+
+    /// Truncate on a char boundary; `String::truncate` panics on
+    /// multibyte boundaries, which API error bodies can contain.
+    fn truncate_chars(s: &str, max: usize) -> String {
+        s.chars().take(max).collect()
     }
 
     fn is_loopback_http(url: &str) -> bool {
@@ -198,6 +213,15 @@ mod tests {
     fn test_is_loopback_http_rejects_subdomain_bypass() {
         assert!(!FalconClient::is_loopback_http("http://localhost.evil.com"));
         assert!(!FalconClient::is_loopback_http("http://127.0.0.1.evil.com"));
+    }
+
+    #[test]
+    fn test_truncate_chars_multibyte_boundary() {
+        // 100 3-byte chars: byte 200 is not a char boundary.
+        let s = "あ".repeat(100);
+        let t = FalconClient::truncate_chars(&s, 200);
+        assert_eq!(t.chars().count(), 100);
+        assert!(FalconClient::truncate_chars(&s, 50).chars().count() == 50);
     }
 
     #[test]
