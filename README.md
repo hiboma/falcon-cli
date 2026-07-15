@@ -563,6 +563,10 @@ falcon-cli api-integration list --limit 10
 
 # Get delivery settings
 falcon-cli delivery-setting get
+
+# Run a CQL search against NG-SIEM (same as Investigate > Advanced event search)
+# Requires the NGSIEM: READ/WRITE API scopes
+falcon-cli ngsiem search --query '#event_simpleName=ProcessRollup2 | tail(10)' --start 1h
 ```
 
 | Command | Description |
@@ -577,7 +581,7 @@ falcon-cli delivery-setting get
 | `fdr` | Manage FDR |
 | `firewall` | Manage firewall rules |
 | `logscale` | Manage Foundry LogScale |
-| `ngsiem` | Manage NGSIEM |
+| `ngsiem` | Manage NGSIEM rules and run CQL event searches |
 | `sample` | Manage sample uploads |
 | `saas-security` | Manage SaaS security |
 | `faas` | Manage FaaS executions |
