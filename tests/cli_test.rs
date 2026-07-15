@@ -212,6 +212,35 @@ fn test_alert_update_help() {
 }
 
 #[test]
+fn test_ngsiem_help() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "ngsiem", "--help"])
+        .output()
+        .expect("failed to execute");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("list"));
+    assert!(stdout.contains("get"));
+    assert!(stdout.contains("search"));
+}
+
+#[test]
+fn test_ngsiem_search_help() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "ngsiem", "search", "--help"])
+        .output()
+        .expect("failed to execute");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--query"));
+    assert!(stdout.contains("--repository"));
+    assert!(stdout.contains("--start"));
+    assert!(stdout.contains("--end"));
+    assert!(stdout.contains("--timeout"));
+    assert!(stdout.contains("search-all"));
+}
+
+#[test]
 fn test_missing_credentials_error() {
     // Isolate the subprocess from the developer's real setup: a populated
     // `~/.config/falcon-cli/credentials.toml`, a live agent `session.json`,
