@@ -175,7 +175,7 @@ impl FalconClient {
 
     /// Truncate on a char boundary; `String::truncate` panics on
     /// multibyte boundaries, which API error bodies can contain.
-    fn truncate_chars(s: &str, max: usize) -> String {
+    pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
         s.chars().take(max).collect()
     }
 
@@ -230,5 +230,73 @@ mod tests {
         assert!(!FalconClient::is_loopback_http("https://localhost"));
         assert!(!FalconClient::is_loopback_http("ftp://localhost"));
         assert!(!FalconClient::is_loopback_http(""));
+    }
+
+    #[tokio::test]
+    async fn test_delete_accepts_empty_204_body() {
+        let server = wiremock::MockServer::start().await;
+        let client = test_support::mock_client(&server).await;
+
+        wiremock::Mock::given(wiremock::matchers::method("DELETE"))
+            .and(wiremock::matchers::path("/some/resource"))
+            .respond_with(wiremock::ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let value = client
+            .delete("/some/resource")
+            .await
+            .expect("204 is success");
+        assert_eq!(value, serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_error_body_is_truncated_on_char_boundary() {
+        let server = wiremock::MockServer::start().await;
+        let client = test_support::mock_client(&server).await;
+
+        // 300 3-byte chars: a byte-based truncate(200) would panic here.
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/fails"))
+            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("あ".repeat(300)))
+            .mount(&server)
+            .await;
+
+        let err = client.get("/fails").await.expect_err("500 is an error");
+        let msg = err.to_string();
+        assert!(msg.contains("500"));
+        assert!(msg.chars().filter(|c| *c == 'あ').count() == 200);
+    }
+}
+
+/// Shared helpers for wiremock-backed tests in this crate.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::FalconClient;
+    use crate::auth::Auth;
+    use crate::config::Config;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Build a `FalconClient` against a wiremock server with the OAuth2
+    /// token endpoint stubbed out.
+    pub(crate) async fn mock_client(server: &MockServer) -> FalconClient {
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-token",
+                "expires_in": 1799,
+            })))
+            .mount(server)
+            .await;
+
+        let config = Config {
+            client_id: "test-client-id".to_string(),
+            client_secret: "test-client-secret".to_string(),
+            base_url: server.uri(),
+            member_cid: None,
+        };
+        FalconClient::new(Auth::new(config), server.uri()).expect("loopback http client")
     }
 }
