@@ -116,7 +116,6 @@ impl FalconClient {
     }
 
     /// Send a DELETE request with automatic re-authentication on 401.
-    #[allow(dead_code)]
     pub async fn delete(&self, path: &str) -> Result<serde_json::Value> {
         let url = format!("{}{}", self.base_url, path);
         let token = self.auth.get_token().await?;
