@@ -581,7 +581,7 @@ falcon-cli ngsiem search --query '#event_simpleName=ProcessRollup2 | tail(10)' -
 | `fdr` | Manage FDR |
 | `firewall` | Manage firewall rules |
 | `logscale` | Manage Foundry LogScale |
-| `ngsiem` | Manage NGSIEM |
+| `ngsiem` | Manage NGSIEM rules and run CQL event searches |
 | `sample` | Manage sample uploads |
 | `saas-security` | Manage SaaS security |
 | `faas` | Manage FaaS executions |
