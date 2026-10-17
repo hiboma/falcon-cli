@@ -512,7 +512,7 @@ async fn report_connectivity(creds: &FalconCredentials) {
         Err(_) => {
             println!(
                 "  POST {}/oauth2/token  →  SKIPPED (credentials incomplete)",
-                creds.base_url
+                crate::sanitize::escape_control_chars(&creds.base_url)
             );
             println!("  hint: client-id and client-secret must both resolve to test auth");
             return;

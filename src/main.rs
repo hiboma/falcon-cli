@@ -718,7 +718,13 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
                         } else {
                             format!("{} commands", p.commands.len())
                         };
-                        println!("  {}{} - {} [{}]", name, marker, p.description, cmd_count);
+                        println!(
+                            "  {}{} - {} [{}]",
+                            sanitize::escape_control_chars(name),
+                            marker,
+                            sanitize::escape_control_chars(&p.description),
+                            cmd_count
+                        );
                     }
                     if let Some(ref ap) = active {
                         let total = total_command_count();
@@ -729,7 +735,10 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
                         };
                         println!(
                             "\nActive profile: {} - {} ({}/{} commands)",
-                            ap.name, ap.description, allowed, total,
+                            sanitize::escape_control_chars(&ap.name),
+                            sanitize::escape_control_chars(&ap.description),
+                            allowed,
+                            total,
                         );
                     }
                 }
@@ -782,15 +791,23 @@ fn to_kebab_case(s: &str) -> String {
 /// Extract command name, action name, and arguments from the parsed Command enum.
 /// This reconstructs what the agent needs to dispatch the command.
 fn extract_command_args(
-    _command: &Command,
+    command: &Command,
 ) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {
     // Serialize the Command to JSON, then extract the structure.
     // Since Command uses clap Subcommand derive, we use the Debug representation
     // to extract names. For a cleaner approach, we re-parse from std::env::args.
     let raw_args: Vec<String> = std::env::args().collect();
+    extract_command_args_from(command, &raw_args)
+}
 
+fn extract_command_args_from(
+    command: &Command,
+    raw_args: &[String],
+) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {
     // Find the command and action positions by skipping global flags.
-    let mut command_name = String::new();
+    // Always use the canonical clap variant name. The raw argv can contain an
+    // alias (for example `alerts`) that would not match profile/agent policy.
+    let command_name = command_name_from(command);
     let mut action_name = String::new();
     let mut extra_args: HashMap<String, serde_json::Value> = HashMap::new();
 
@@ -838,7 +855,6 @@ fn extract_command_args(
 
     // Now raw_args[i] should be the command name.
     if i < raw_args.len() {
-        command_name = raw_args[i].clone();
         i += 1;
     }
 
@@ -945,5 +961,25 @@ fn write_binary_response(value: &serde_json::Value) {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_request_uses_canonical_command_name_for_alias() {
+        let raw_args = ["falcon-cli", "alerts", "list"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let cli = Cli::try_parse_from(&raw_args).unwrap();
+
+        let (command, action, args) = extract_command_args_from(&cli.command, &raw_args).unwrap();
+
+        assert_eq!(command, "alert");
+        assert_eq!(action, "list");
+        assert!(args.is_empty());
     }
 }
