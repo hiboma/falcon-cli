@@ -253,8 +253,8 @@ Profile restrictions are enforced before both direct and agent routing. An
 explicit or default profile name that is not defined fails closed. When an
 agent starts with an active profile, that profile becomes an upper bound on
 the agent's commands and is intersected with the `agent.toml` allowlist. A
-project file may add or replace named profiles, but omitting `default_profile`
-does not disable a default profile configured in the user's global file.
+project file may add profiles or narrow a same-named global profile. It cannot
+replace a global default profile or broaden its command set.
 
 ### Diagnostics (`doctor`)
 

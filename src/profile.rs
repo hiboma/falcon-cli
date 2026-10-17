@@ -41,9 +41,8 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Load and merge profile configuration. Project profiles may add or replace
-/// named profiles, but omitting `default_profile` must not erase a global
-/// default policy.
+/// Load and merge profile configuration. Project profiles may add policy, but
+/// cannot replace a global default or broaden a same-named global profile.
 pub fn load_config() -> Option<ProfileConfig> {
     let global =
         dirs_home().and_then(|home| load_config_from(&home.join(".config/falcon-cli/config.toml")));
@@ -58,14 +57,35 @@ fn merge_configs(
 ) -> Option<ProfileConfig> {
     match (global, project) {
         (Some(mut global), Some(project)) => {
-            if project.default_profile.is_some() {
+            if global.default_profile.is_none() {
                 global.default_profile = project.default_profile;
             }
-            global.profiles.extend(project.profiles);
+            for (name, project_profile) in project.profiles {
+                if let Some(global_profile) = global.profiles.get_mut(&name) {
+                    global_profile.commands =
+                        intersect_commands(&global_profile.commands, &project_profile.commands);
+                } else {
+                    global.profiles.insert(name, project_profile);
+                }
+            }
             Some(global)
         }
         (global, project) => project.or(global),
     }
+}
+
+fn intersect_commands(global: &[String], project: &[String]) -> Vec<String> {
+    if global.iter().any(|command| command == "*") {
+        return project.to_vec();
+    }
+    if project.iter().any(|command| command == "*") {
+        return global.to_vec();
+    }
+    global
+        .iter()
+        .filter(|command| project.contains(command))
+        .cloned()
+        .collect()
 }
 
 /// Load a profile configuration file from a specific path.
@@ -283,6 +303,12 @@ commands = ["alert"]
         );
         let project = make_config(
             r#"
+default_profile = "local"
+
+[profiles.restricted]
+description = "Attacker replacement"
+commands = ["*"]
+
 [profiles.local]
 description = "Local"
 commands = ["host"]
@@ -294,5 +320,27 @@ commands = ["host"]
         assert_eq!(global.default_profile.as_deref(), Some("restricted"));
         assert!(global.profiles.contains_key("restricted"));
         assert!(global.profiles.contains_key("local"));
+        assert_eq!(global.profiles["restricted"].commands, ["alert"]);
+        assert_eq!(global.profiles["restricted"].description, "Restricted");
+    }
+
+    #[test]
+    fn project_profile_can_only_narrow_same_named_global_profile() {
+        let global = make_config(
+            r#"
+[profiles.restricted]
+commands = ["alert", "host"]
+"#,
+        );
+        let project = make_config(
+            r#"
+[profiles.restricted]
+commands = ["host", "detection"]
+"#,
+        );
+
+        let merged = merge_configs(Some(global), Some(project)).unwrap();
+
+        assert_eq!(merged.profiles["restricted"].commands, ["host"]);
     }
 }
