@@ -37,27 +37,55 @@ impl ActiveProfile {
     }
 }
 
-/// Search paths for the profile configuration file (highest priority first).
-fn config_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from(".falcon-cli.toml")];
-    if let Some(home) = dirs_home() {
-        paths.push(home.join(".config/falcon-cli/config.toml"));
-    }
-    paths
-}
-
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Load the first profile configuration file found.
+/// Load and merge profile configuration. Project profiles may add policy, but
+/// cannot replace a global default or broaden a same-named global profile.
 pub fn load_config() -> Option<ProfileConfig> {
-    for path in config_search_paths() {
-        if let Some(config) = load_config_from(&path) {
-            return Some(config);
+    let global =
+        dirs_home().and_then(|home| load_config_from(&home.join(".config/falcon-cli/config.toml")));
+    let project = load_config_from(Path::new(".falcon-cli.toml"));
+
+    merge_configs(global, project)
+}
+
+fn merge_configs(
+    global: Option<ProfileConfig>,
+    project: Option<ProfileConfig>,
+) -> Option<ProfileConfig> {
+    match (global, project) {
+        (Some(mut global), Some(project)) => {
+            if global.default_profile.is_none() {
+                global.default_profile = project.default_profile;
+            }
+            for (name, project_profile) in project.profiles {
+                if let Some(global_profile) = global.profiles.get_mut(&name) {
+                    global_profile.commands =
+                        intersect_commands(&global_profile.commands, &project_profile.commands);
+                } else {
+                    global.profiles.insert(name, project_profile);
+                }
+            }
+            Some(global)
         }
+        (global, project) => project.or(global),
     }
-    None
+}
+
+fn intersect_commands(global: &[String], project: &[String]) -> Vec<String> {
+    if global.iter().any(|command| command == "*") {
+        return project.to_vec();
+    }
+    if project.iter().any(|command| command == "*") {
+        return global.to_vec();
+    }
+    global
+        .iter()
+        .filter(|command| project.contains(command))
+        .cloned()
+        .collect()
 }
 
 /// Load a profile configuration file from a specific path.
@@ -88,6 +116,53 @@ pub fn resolve(cli_profile: Option<&str>) -> Option<ActiveProfile> {
         description: profile.description.clone(),
         commands: profile.commands.clone(),
     })
+}
+
+/// Resolve a profile for authorization. Explicit or configured profile names
+/// fail closed when their configuration cannot be loaded or the name is not
+/// defined; silently falling back to unrestricted access would bypass policy.
+pub fn resolve_checked(cli_profile: Option<&str>) -> Result<Option<ActiveProfile>, String> {
+    let env_profile = std::env::var("FALCON_PROFILE").ok();
+    let explicit_name = cli_profile.map(str::to_owned).or(env_profile);
+    let config = load_config();
+
+    if let Some(name) = explicit_name {
+        let config = config.ok_or_else(|| {
+            format!(
+                "profile '{}' was requested, but no valid profile configuration was found",
+                crate::sanitize::escape_control_chars(&name)
+            )
+        })?;
+        let profile = config.profiles.get(&name).ok_or_else(|| {
+            format!(
+                "profile '{}' is not defined",
+                crate::sanitize::escape_control_chars(&name)
+            )
+        })?;
+        return Ok(Some(ActiveProfile {
+            name,
+            description: profile.description.clone(),
+            commands: profile.commands.clone(),
+        }));
+    }
+
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let Some(name) = config.default_profile else {
+        return Ok(None);
+    };
+    let profile = config.profiles.get(&name).ok_or_else(|| {
+        format!(
+            "default profile '{}' is not defined",
+            crate::sanitize::escape_control_chars(&name)
+        )
+    })?;
+    Ok(Some(ActiveProfile {
+        name,
+        description: profile.description.clone(),
+        commands: profile.commands.clone(),
+    }))
 }
 
 // ── Built-in recommended profiles for `profile init` ──
@@ -213,5 +288,59 @@ commands = ["alert"]
 "#,
         );
         assert!(config.default_profile.is_none());
+    }
+
+    #[test]
+    fn project_profiles_do_not_erase_global_default() {
+        let global = make_config(
+            r#"
+default_profile = "restricted"
+
+[profiles.restricted]
+description = "Restricted"
+commands = ["alert"]
+"#,
+        );
+        let project = make_config(
+            r#"
+default_profile = "local"
+
+[profiles.restricted]
+description = "Attacker replacement"
+commands = ["*"]
+
+[profiles.local]
+description = "Local"
+commands = ["host"]
+"#,
+        );
+
+        let global = merge_configs(Some(global), Some(project)).unwrap();
+
+        assert_eq!(global.default_profile.as_deref(), Some("restricted"));
+        assert!(global.profiles.contains_key("restricted"));
+        assert!(global.profiles.contains_key("local"));
+        assert_eq!(global.profiles["restricted"].commands, ["alert"]);
+        assert_eq!(global.profiles["restricted"].description, "Restricted");
+    }
+
+    #[test]
+    fn project_profile_can_only_narrow_same_named_global_profile() {
+        let global = make_config(
+            r#"
+[profiles.restricted]
+commands = ["alert", "host"]
+"#,
+        );
+        let project = make_config(
+            r#"
+[profiles.restricted]
+commands = ["host", "detection"]
+"#,
+        );
+
+        let merged = merge_configs(Some(global), Some(project)).unwrap();
+
+        assert_eq!(merged.profiles["restricted"].commands, ["host"]);
     }
 }

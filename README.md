@@ -159,6 +159,13 @@ Priority for `client_id` / `base_url` / `member_cid`: CLI arguments > environmen
 
 Priority for `client_secret`: `FALCON_CLIENT_SECRET` > macOS Keychain > credentials.toml. See [Credential storage (macOS Keychain)](#credential-storage-macos-keychain) above.
 
+For security, an environment or Keychain `client_secret` is not combined with
+`client_id`, `base_url`, or `member_cid` read from the project-local
+`.falcon-credentials.toml`. Set the matching non-secret values explicitly with
+CLI options or environment variables, use the global credentials file, or keep
+the matching secret in the same project-local file. This prevents an untrusted
+working directory from redirecting a stored secret to another API origin.
+
 Template:
 
 ```toml
@@ -242,6 +249,13 @@ commands = ["*"]
 
 Priority: `--profile` flag > `FALCON_PROFILE` env > `default_profile` in config
 
+Profile restrictions are enforced before both direct and agent routing. An
+explicit or default profile name that is not defined fails closed. When an
+agent starts with an active profile, that profile becomes an upper bound on
+the agent's commands and is intersected with the `agent.toml` allowlist. A
+project file may add profiles or narrow a same-named global profile. It cannot
+replace a global default profile or broaden its command set.
+
 ### Diagnostics (`doctor`)
 
 `falcon-cli doctor` reports the state of your local configuration and verifies connectivity, without ever printing secret values. Use it to debug "why does falcon-cli not authenticate?".
@@ -275,6 +289,12 @@ FALCON_CLIENT_ID=xxx FALCON_CLIENT_SECRET=yyy falcon-cli agent start
 ```
 
 The agent forks into the background and writes a session file (`session.json`) for cross-terminal auto-detection. Any terminal can use the agent without additional configuration.
+
+On macOS, the agent validates the peer's running code object against its
+captured designated code requirement. The agent refuses to start when its
+executable has no designated requirement; use an ad-hoc signature for local
+development. On Linux, the canonical executable path must match. Request
+frames are limited to 1 MiB while they are read and time out after 30 seconds.
 
 ### Use commands via agent
 
@@ -539,6 +559,12 @@ falcon-cli user list --limit 10
 ```bash
 # List event streams
 falcon-cli event-stream list --limit 5
+
+# Get stream details (session_token is masked by default)
+falcon-cli event-stream get --id <STREAM_ID>
+
+# Explicitly include session_token in stdout or agent IPC
+falcon-cli event-stream get --id <STREAM_ID> --show-secrets
 
 # List workflows
 falcon-cli workflow list --limit 10

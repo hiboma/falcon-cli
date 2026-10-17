@@ -99,6 +99,12 @@ FALCON_CLIENT_SECRET (env) > Keychain > credentials.toml > None
 client_id / base_url / member_cid は機密性が低いため Keychain に格納せず、
 CLI args > env > toml の従来順を維持します。
 
+ただし、環境変数または Keychain の client_secret を project-local
+`.falcon-credentials.toml` 由来の client_id / base_url / member_cid と
+暗黙に合成しません。この組み合わせは資格情報の利用先を作業ディレクトリ
+から変更できるため拒否します。CLI option または環境変数による明示指定、
+global credentials.toml、同じ project-local file 内の一式は維持します。
+
 ### StoreError の分類とフォールバック判断
 
 `StoreError` を 2 variant に分けます。

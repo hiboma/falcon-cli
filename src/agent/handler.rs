@@ -176,19 +176,31 @@ fn is_valid_name(name: &str) -> bool {
 
 fn classify_error(err: &crate::error::FalconError) -> (String, String) {
     // Log full error details server-side, return generic messages to client.
-    eprintln!("agent: command error: {}", err);
+    eprintln!(
+        "agent: command error: {}",
+        crate::sanitize::escape_control_chars(&err.to_string())
+    );
     match err {
         crate::error::FalconError::Auth(_) => {
             ("auth".to_string(), "authentication failed".to_string())
         }
-        crate::error::FalconError::Api(msg) => ("api".to_string(), msg.clone()),
+        crate::error::FalconError::Api(msg) => (
+            "api".to_string(),
+            crate::sanitize::escape_control_chars(msg),
+        ),
         crate::error::FalconError::Http(_) => {
             ("http".to_string(), "HTTP request failed".to_string())
         }
         crate::error::FalconError::Json(_) => {
             ("json".to_string(), "response parsing failed".to_string())
         }
-        crate::error::FalconError::Config(msg) => ("config".to_string(), msg.clone()),
-        crate::error::FalconError::InvalidInput(msg) => ("invalid_input".to_string(), msg.clone()),
+        crate::error::FalconError::Config(msg) => (
+            "config".to_string(),
+            crate::sanitize::escape_control_chars(msg),
+        ),
+        crate::error::FalconError::InvalidInput(msg) => (
+            "invalid_input".to_string(),
+            crate::sanitize::escape_control_chars(msg),
+        ),
     }
 }

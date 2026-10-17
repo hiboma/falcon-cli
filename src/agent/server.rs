@@ -4,12 +4,15 @@ use crate::agent::security::{CommandWhitelist, RateLimiter, SecurityConfig};
 use crate::config::FalconCredentials;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 
 /// Maximum size of a single request line (1 MiB).
 const MAX_REQUEST_SIZE: usize = 1024 * 1024;
+
+/// Maximum time to receive one complete request frame.
+const REQUEST_READ_TIMEOUT_SECS: u64 = 30;
 
 /// Maximum number of concurrent connections.
 const MAX_CONNECTIONS: usize = 64;
@@ -48,6 +51,7 @@ pub fn start(
     config_path: Option<&Path>,
     foreground: bool,
     credentials: FalconCredentials,
+    profile_commands: Option<Vec<String>>,
 ) -> crate::error::Result<()> {
     // Check if an agent is already running.
     if let Some(pid) = check_already_running() {
@@ -66,6 +70,7 @@ pub fn start(
 
     let whitelist = Arc::new(CommandWhitelist::new(
         &security_config.security.allowed_commands,
+        profile_commands.as_deref(),
     ));
     let rate_limiter = Arc::new(RateLimiter::new(
         security_config.security.rate_limit_per_minute,
@@ -242,6 +247,10 @@ async fn run_agent(
     session_token: String,
     credentials: FalconCredentials,
 ) -> crate::error::Result<()> {
+    let peer_verifier = Arc::new(crate::agent::peer_verify::PeerVerifier::new().map_err(|e| {
+        crate::error::FalconError::Config(format!("failed to initialize peer verification: {}", e))
+    })?);
+
     // Bind the Unix listener.
     let listener = UnixListener::bind(socket_path).map_err(|e| {
         crate::error::FalconError::Config(format!(
@@ -303,7 +312,7 @@ async fn run_agent(
     let pid_path_owned = pid_path.clone();
 
     tokio::select! {
-        _ = accept_loop(&listener, handler) => {}
+        _ = accept_loop(&listener, handler, peer_verifier) => {}
         _ = shutdown_signal() => {
             eprintln!("agent: shutting down (signal)");
         }
@@ -319,7 +328,11 @@ async fn run_agent(
     Ok(())
 }
 
-async fn accept_loop(listener: &UnixListener, handler: Arc<RequestHandler>) {
+async fn accept_loop(
+    listener: &UnixListener,
+    handler: Arc<RequestHandler>,
+    peer_verifier: Arc<crate::agent::peer_verify::PeerVerifier>,
+) {
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
     loop {
@@ -336,22 +349,27 @@ async fn accept_loop(listener: &UnixListener, handler: Arc<RequestHandler>) {
                 }
 
                 // Verify peer process (code signature on macOS, path match on Linux).
-                match crate::agent::peer_verify::verify_peer(&stream) {
+                match peer_verifier.verify_peer(&stream) {
                     Ok(verification) => {
                         if !verification.signature_valid {
                             eprintln!(
                                 "agent: rejected connection from unverified binary pid={} path={}",
-                                verification.pid, verification.exe_path,
+                                verification.pid,
+                                crate::sanitize::escape_control_chars(&verification.exe_path),
                             );
                             continue;
                         }
                         eprintln!(
                             "agent: accepted connection pid={} path={}",
-                            verification.pid, verification.exe_path,
+                            verification.pid,
+                            crate::sanitize::escape_control_chars(&verification.exe_path),
                         );
                     }
                     Err(e) => {
-                        eprintln!("agent: peer verification failed: {}", e);
+                        eprintln!(
+                            "agent: peer verification failed: {}",
+                            crate::sanitize::escape_control_chars(&e)
+                        );
                         continue;
                     }
                 }
@@ -388,7 +406,7 @@ async fn handle_connection(
 
     loop {
         line.clear();
-        let n = buf_reader.read_line(&mut line).await?;
+        let n = read_request_line(&mut buf_reader, &mut line).await?;
         if n == 0 {
             // Connection closed.
             break;
@@ -437,6 +455,24 @@ async fn handle_connection(
     Ok(())
 }
 
+async fn read_request_line<R>(reader: &mut R, line: &mut String) -> std::io::Result<usize>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut limited = reader.take((MAX_REQUEST_SIZE + 1) as u64);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(REQUEST_READ_TIMEOUT_SECS),
+        limited.read_line(line),
+    )
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "agent request frame timed out",
+        )
+    })?
+}
+
 async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
@@ -467,4 +503,33 @@ fn dirs_config_path() -> std::path::PathBuf {
             .join("agent.toml");
     }
     std::path::PathBuf::from("/etc/falcon-cli/agent.toml")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bounded_request_reader_accepts_maximum_frame() {
+        let input = vec![b'a'; MAX_REQUEST_SIZE];
+        let mut reader = BufReader::new(input.as_slice());
+        let mut line = String::new();
+
+        let count = read_request_line(&mut reader, &mut line).await.unwrap();
+
+        assert_eq!(count, MAX_REQUEST_SIZE);
+        assert_eq!(line.len(), MAX_REQUEST_SIZE);
+    }
+
+    #[tokio::test]
+    async fn bounded_request_reader_stops_at_limit_plus_one() {
+        let input = vec![b'a'; MAX_REQUEST_SIZE + 16];
+        let mut reader = BufReader::new(input.as_slice());
+        let mut line = String::new();
+
+        let count = read_request_line(&mut reader, &mut line).await.unwrap();
+
+        assert_eq!(count, MAX_REQUEST_SIZE + 1);
+        assert_eq!(line.len(), MAX_REQUEST_SIZE + 1);
+    }
 }

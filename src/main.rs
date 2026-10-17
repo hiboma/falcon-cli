@@ -8,6 +8,7 @@ mod dispatch;
 mod error;
 mod output;
 mod profile;
+mod sanitize;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{CommandFactory, Parser};
@@ -89,6 +90,7 @@ fn main() {
             config.as_deref(),
             *foreground,
             credentials,
+            cli.profile.as_deref(),
         );
         return;
     }
@@ -111,6 +113,11 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         return;
     }
 
+    // Apply profile authorization before selecting direct or agent transport.
+    // The transport must not be able to bypass the command policy.
+    let active_profile = resolve_profile_or_exit(cli.profile.as_deref());
+    enforce_profile_or_exit(active_profile.as_ref(), &cli.command);
+
     // If FALCON_AGENT_TOKEN is set, route through the agent automatically.
     if !cli.no_agent && cli.token.is_some() {
         handle_agent_client(&cli).await;
@@ -127,21 +134,6 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         }
     }
 
-    // Check profile restrictions before dispatching.
-    if let Some(ref active_profile) = profile::resolve(cli.profile.as_deref()) {
-        let cmd_name = command_name_from(&cli.command);
-        if !active_profile.is_command_allowed(&cmd_name) {
-            eprintln!(
-                "Error: command '{}' is not allowed by profile '{}'",
-                cmd_name, active_profile.name
-            );
-            eprintln!(
-                "hint: use --profile to switch profiles, or run 'falcon-cli profile list' to see available profiles"
-            );
-            std::process::exit(1);
-        }
-    }
-
     // Direct mode: call API directly using resolved credentials.
     let config = match credentials.to_config() {
         Ok(c) => c,
@@ -152,7 +144,10 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         }
     };
 
-    let auth = auth::Auth::new(config.clone());
+    let auth = auth::Auth::new(config.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
     let falcon = client::FalconClient::new(auth, config.base_url.clone()).unwrap_or_else(|e| {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -501,6 +496,7 @@ fn handle_agent_start(
     config: Option<&str>,
     foreground: bool,
     credentials: FalconCredentials,
+    cli_profile: Option<&str>,
 ) {
     if let Err(e) = credentials.validate() {
         eprintln!("Error: {}", e);
@@ -515,7 +511,12 @@ fn handle_agent_start(
         }
     };
 
-    let auth = auth::Auth::new(config_obj.clone());
+    let active_profile = resolve_profile_or_exit(cli_profile);
+
+    let auth = auth::Auth::new(config_obj.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
     let falcon = client::FalconClient::new(auth, config_obj.base_url.clone()).unwrap_or_else(|e| {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -541,8 +542,34 @@ fn handle_agent_start(
         config_path.as_deref(),
         foreground,
         credentials,
+        active_profile.map(|profile| profile.commands),
     ) {
         eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn resolve_profile_or_exit(cli_profile: Option<&str>) -> Option<profile::ActiveProfile> {
+    profile::resolve_checked(cli_profile).unwrap_or_else(|error| {
+        eprintln!("Error: {}", error);
+        std::process::exit(1);
+    })
+}
+
+fn enforce_profile_or_exit(active_profile: Option<&profile::ActiveProfile>, command: &Command) {
+    let Some(active_profile) = active_profile else {
+        return;
+    };
+    let cmd_name = command_name_from(command);
+    if !active_profile.is_command_allowed(&cmd_name) {
+        eprintln!(
+            "Error: command '{}' is not allowed by profile '{}'",
+            sanitize::escape_control_chars(&cmd_name),
+            sanitize::escape_control_chars(&active_profile.name)
+        );
+        eprintln!(
+            "hint: use --profile to switch profiles, or run 'falcon-cli profile list' to see available profiles"
+        );
         std::process::exit(1);
     }
 }
@@ -691,7 +718,13 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
                         } else {
                             format!("{} commands", p.commands.len())
                         };
-                        println!("  {}{} - {} [{}]", name, marker, p.description, cmd_count);
+                        println!(
+                            "  {}{} - {} [{}]",
+                            sanitize::escape_control_chars(name),
+                            marker,
+                            sanitize::escape_control_chars(&p.description),
+                            cmd_count
+                        );
                     }
                     if let Some(ref ap) = active {
                         let total = total_command_count();
@@ -702,7 +735,10 @@ fn handle_profile_command(action: &ProfileAction, cli_profile: Option<&str>) {
                         };
                         println!(
                             "\nActive profile: {} - {} ({}/{} commands)",
-                            ap.name, ap.description, allowed, total,
+                            sanitize::escape_control_chars(&ap.name),
+                            sanitize::escape_control_chars(&ap.description),
+                            allowed,
+                            total,
                         );
                     }
                 }
@@ -755,15 +791,23 @@ fn to_kebab_case(s: &str) -> String {
 /// Extract command name, action name, and arguments from the parsed Command enum.
 /// This reconstructs what the agent needs to dispatch the command.
 fn extract_command_args(
-    _command: &Command,
+    command: &Command,
 ) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {
     // Serialize the Command to JSON, then extract the structure.
     // Since Command uses clap Subcommand derive, we use the Debug representation
     // to extract names. For a cleaner approach, we re-parse from std::env::args.
     let raw_args: Vec<String> = std::env::args().collect();
+    extract_command_args_from(command, &raw_args)
+}
 
+fn extract_command_args_from(
+    command: &Command,
+    raw_args: &[String],
+) -> error::Result<(String, String, HashMap<String, serde_json::Value>)> {
     // Find the command and action positions by skipping global flags.
-    let mut command_name = String::new();
+    // Always use the canonical clap variant name. The raw argv can contain an
+    // alias (for example `alerts`) that would not match profile/agent policy.
+    let command_name = command_name_from(command);
     let mut action_name = String::new();
     let mut extra_args: HashMap<String, serde_json::Value> = HashMap::new();
 
@@ -811,7 +855,6 @@ fn extract_command_args(
 
     // Now raw_args[i] should be the command name.
     if i < raw_args.len() {
-        command_name = raw_args[i].clone();
         i += 1;
     }
 
@@ -918,5 +961,25 @@ fn write_binary_response(value: &serde_json::Value) {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_request_uses_canonical_command_name_for_alias() {
+        let raw_args = ["falcon-cli", "alerts", "list"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let cli = Cli::try_parse_from(&raw_args).unwrap();
+
+        let (command, action, args) = extract_command_args_from(&cli.command, &raw_args).unwrap();
+
+        assert_eq!(command, "alert");
+        assert_eq!(action, "list");
+        assert!(args.is_empty());
     }
 }

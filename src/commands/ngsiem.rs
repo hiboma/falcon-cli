@@ -129,7 +129,7 @@ async fn search(
     let id = job["id"].as_str().ok_or_else(|| {
         FalconError::Api(format!(
             "queryjob id missing in response: {}",
-            FalconClient::truncate_chars(&job.to_string(), 200)
+            crate::sanitize::truncate_chars(&job.to_string(), 200)
         ))
     })?;
     let job_path = format!("{}/{}", jobs_path, encode(id));

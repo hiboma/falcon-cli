@@ -32,6 +32,10 @@ pub enum Action {
         /// Stream ID(s)
         #[arg(long, required = true, num_args = 1..)]
         id: Vec<String>,
+
+        /// Include session_token values in output and agent IPC
+        #[arg(long)]
+        show_secrets: bool,
     },
 }
 
@@ -52,10 +56,64 @@ pub async fn execute(client: &FalconClient, action: Action) -> Result<serde_json
             };
             client.get(&path).await
         }
-        Action::Get { id } => {
+        Action::Get { id, show_secrets } => {
             let ids: Vec<String> = id.iter().map(|i| format!("ids={}", i)).collect();
             let path = format!("/sensors/entities/data-feed/v1?{}", ids.join("&"));
-            client.get(&path).await
+            let mut response = client.get(&path).await?;
+            if !show_secrets {
+                redact_session_tokens(&mut response);
+            }
+            Ok(response)
         }
+    }
+}
+
+fn redact_session_tokens(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                let normalized_key: String = key
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                if normalized_key == "sessiontoken" {
+                    *value = serde_json::Value::String("***".to_string());
+                } else {
+                    redact_session_tokens(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_session_tokens(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_nested_session_tokens_without_changing_other_fields() {
+        let mut value = serde_json::json!({
+            "resources": [{
+                "session_token": "secret",
+                "sessionToken": "camel-secret",
+                "Session-Token": "mixed-secret",
+                "nested": {"session_token": "another", "id": "stream-id"}
+            }]
+        });
+
+        redact_session_tokens(&mut value);
+
+        assert_eq!(value["resources"][0]["session_token"], "***");
+        assert_eq!(value["resources"][0]["sessionToken"], "***");
+        assert_eq!(value["resources"][0]["Session-Token"], "***");
+        assert_eq!(value["resources"][0]["nested"]["session_token"], "***");
+        assert_eq!(value["resources"][0]["nested"]["id"], "stream-id");
     }
 }

@@ -40,6 +40,9 @@ pub struct FalconCredentials {
     pub client_secret: Option<String>,
     pub base_url: String,
     pub member_cid: Option<String>,
+    /// An environment or Keychain secret must not be silently combined with
+    /// identity or destination fields supplied by the current directory.
+    unsafe_project_binding: bool,
 }
 
 /// Custom `Debug` impl that masks `client_secret` so that accidental `dbg!` /
@@ -132,21 +135,24 @@ fn non_empty(s: Option<String>) -> Option<String> {
 }
 
 /// Load credentials from the first credentials.toml found.
-fn load_credentials_file() -> CredentialsFile {
-    for path in credentials_search_paths() {
+fn load_credentials_file() -> (CredentialsFile, bool) {
+    for (index, path) in credentials_search_paths().into_iter().enumerate() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(root) = toml::from_str::<CredentialsFileRoot>(&content) {
                 let c = root.credentials;
-                return CredentialsFile {
-                    client_id: non_empty(c.client_id),
-                    client_secret: non_empty(c.client_secret),
-                    base_url: non_empty(c.base_url),
-                    member_cid: non_empty(c.member_cid),
-                };
+                return (
+                    CredentialsFile {
+                        client_id: non_empty(c.client_id),
+                        client_secret: non_empty(c.client_secret),
+                        base_url: non_empty(c.base_url),
+                        member_cid: non_empty(c.member_cid),
+                    },
+                    index == 0,
+                );
             }
         }
     }
-    CredentialsFile::default()
+    (CredentialsFile::default(), false)
 }
 
 impl FalconCredentials {
@@ -183,34 +189,55 @@ impl FalconCredentials {
         cli_member_cid: Option<&str>,
         store: Option<&dyn CredentialStore>,
     ) -> Self {
-        let file = load_credentials_file();
+        let (file, project_file) = load_credentials_file();
+
+        let env_client_id = std::env::var("FALCON_CLIENT_ID").ok();
+        let env_client_secret = std::env::var("FALCON_CLIENT_SECRET").ok();
+        let env_base_url = std::env::var("FALCON_BASE_URL").ok();
+        let env_member_cid = std::env::var("FALCON_MEMBER_CID").ok();
+
+        let project_client_id = project_file
+            && cli_client_id.is_none()
+            && env_client_id.is_none()
+            && file.client_id.is_some();
+        let project_base_url = project_file
+            && cli_base_url.is_none()
+            && env_base_url.is_none()
+            && file.base_url.is_some();
+        let project_member_cid = project_file
+            && cli_member_cid.is_none()
+            && env_member_cid.is_none()
+            && file.member_cid.is_some();
 
         let client_id = cli_client_id
             .map(String::from)
-            .or_else(|| std::env::var("FALCON_CLIENT_ID").ok())
+            .or(env_client_id)
             .or(file.client_id);
 
-        let client_secret = std::env::var("FALCON_CLIENT_SECRET").ok().or_else(|| {
-            match read_secret_from_store(store, KEY_CLIENT_SECRET) {
-                StoreLookup::Found(v) => Some(v),
+        let (client_secret, external_secret) = match env_client_secret {
+            Some(secret) => (Some(secret), true),
+            None => match read_secret_from_store(store, KEY_CLIENT_SECRET) {
+                StoreLookup::Found(v) => (Some(v), true),
                 // Backend failures: do NOT fall back to plaintext toml.
                 // Surface the missing secret to the caller, which will turn
                 // into a "client_secret not set" error from validate().
-                StoreLookup::BackendError => None,
+                StoreLookup::BackendError => (None, false),
                 // Store skipped or empty: fall through to toml.
-                StoreLookup::SkipFallthrough | StoreLookup::NotStored => file.client_secret,
-            }
-        });
+                StoreLookup::SkipFallthrough | StoreLookup::NotStored => {
+                    (file.client_secret, false)
+                }
+            },
+        };
 
         let base_url = cli_base_url
             .map(String::from)
-            .or_else(|| std::env::var("FALCON_BASE_URL").ok())
+            .or(env_base_url)
             .or(file.base_url)
             .unwrap_or_else(|| "https://api.crowdstrike.com".to_string());
 
         let member_cid = cli_member_cid
             .map(String::from)
-            .or_else(|| std::env::var("FALCON_MEMBER_CID").ok())
+            .or(env_member_cid)
             .or(file.member_cid);
 
         Self {
@@ -218,6 +245,8 @@ impl FalconCredentials {
             client_secret,
             base_url,
             member_cid,
+            unsafe_project_binding: external_secret
+                && (project_client_id || project_base_url || project_member_cid),
         }
     }
 
@@ -244,6 +273,13 @@ impl FalconCredentials {
     /// Build a `Config` from the resolved credentials.
     /// Returns an error if required fields are missing.
     pub fn to_config(&self) -> Result<Config> {
+        if self.unsafe_project_binding {
+            return Err(FalconError::Config(
+                "refusing to combine FALCON_CLIENT_SECRET or a Keychain secret with client_id, base_url, or member_cid from .falcon-credentials.toml; set those values explicitly with CLI flags or environment variables, or store the matching client_secret in the same project file"
+                    .to_string(),
+            ));
+        }
+
         let client_id = self.client_id.clone().ok_or_else(|| {
             FalconError::Config(
                 "client_id not set. Use --client-id or FALCON_CLIENT_ID.".to_string(),
@@ -376,6 +412,7 @@ mod tests {
             client_secret: Some("secret".to_string()),
             base_url: "https://example.com".to_string(),
             member_cid: Some("cid".to_string()),
+            ..Default::default()
         };
         let config = creds.to_config().unwrap();
         assert_eq!(config.client_id, "id");
@@ -555,6 +592,7 @@ client_secret = "toml-secret"
             client_secret: Some("super-secret".into()),
             base_url: "https://example.com".to_string(),
             member_cid: Some("cid".into()),
+            ..Default::default()
         };
         let dbg = format!("{:?}", creds);
         assert!(
@@ -573,6 +611,49 @@ client_secret = "toml-secret"
         store.set(KEY_CLIENT_SECRET, "kc-secret").unwrap();
         let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
         assert_eq!(creds.client_secret.as_deref(), Some("kc-secret"));
+    }
+
+    #[test]
+    fn test_to_config_rejects_external_secret_with_project_configuration() {
+        let creds = FalconCredentials {
+            client_id: Some("project-id".to_string()),
+            client_secret: Some("keychain-secret".to_string()),
+            base_url: "https://attacker.example".to_string(),
+            member_cid: None,
+            unsafe_project_binding: true,
+        };
+
+        let error = creds
+            .to_config()
+            .expect_err("unsafe cross-source credential binding must fail");
+        assert!(error.to_string().contains("refusing to combine"));
+    }
+
+    #[test]
+    fn test_project_file_cannot_redirect_keychain_secret() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { clear_falcon_env() };
+        let original_dir = std::env::current_dir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join(".falcon-credentials.toml"),
+            r#"
+[credentials]
+client_id = "attacker-client"
+base_url = "https://attacker.example"
+"#,
+        )
+        .unwrap();
+        std::env::set_current_dir(project.path()).unwrap();
+
+        let store = credential_store::test_support::MemoryStore::new();
+        store.set(KEY_CLIENT_SECRET, "keychain-secret").unwrap();
+        let creds = FalconCredentials::resolve_with_store(None, None, None, Some(&store));
+        let result = creds.to_config();
+
+        std::env::set_current_dir(original_dir).unwrap();
+        unsafe { clear_falcon_env() };
+        assert!(result.is_err(), "project-local redirect must be rejected");
     }
 
     #[test]

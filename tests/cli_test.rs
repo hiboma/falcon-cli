@@ -429,3 +429,60 @@ fn test_doctor_reports_empty_env_as_set_not_unset() {
         base_url_line
     );
 }
+
+#[test]
+fn test_profile_restriction_is_checked_before_agent_routing() {
+    let home = tempfile::tempdir().expect("create home tempdir");
+    let cwd = tempfile::tempdir().expect("create cwd tempdir");
+    std::fs::write(
+        cwd.path().join(".falcon-cli.toml"),
+        r#"
+[profiles.restricted]
+description = "alert only"
+commands = ["alert"]
+"#,
+    )
+    .expect("write profile config");
+    let bin = env!("CARGO_BIN_EXE_falcon-cli");
+
+    let output = Command::new(bin)
+        .args(["--profile", "restricted", "host", "list"])
+        .current_dir(cwd.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("FALCON_AGENT_TOKEN", "test-token")
+        .env("FALCON_AGENT_SOCKET", "/tmp/nonexistent-falcon-agent.sock")
+        .output()
+        .expect("failed to execute");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("not allowed by profile 'restricted'"));
+    assert!(!stderr.contains("failed to connect to agent"));
+}
+
+#[test]
+fn test_unknown_explicit_profile_fails_closed() {
+    let home = tempfile::tempdir().expect("create home tempdir");
+    let cwd = tempfile::tempdir().expect("create cwd tempdir");
+    std::fs::write(
+        cwd.path().join(".falcon-cli.toml"),
+        "[profiles.known]\ncommands = [\"alert\"]\n",
+    )
+    .expect("write profile config");
+    let bin = env!("CARGO_BIN_EXE_falcon-cli");
+
+    let output = Command::new(bin)
+        .args(["--profile", "missing", "host", "list"])
+        .current_dir(cwd.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env_remove("FALCON_AGENT_TOKEN")
+        .env_remove("FALCON_AGENT_SOCKET")
+        .output()
+        .expect("failed to execute");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("profile 'missing' is not defined"));
+}
