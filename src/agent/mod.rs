@@ -217,6 +217,21 @@ fn is_debug() -> bool {
     std::env::var("RUST_LOG").is_ok()
 }
 
+/// List all running agent socket paths in the socket directory.
+pub fn list_agent_sockets() -> Vec<PathBuf> {
+    let dir = resolve_socket_dir();
+    let mut sockets = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("sock") {
+                sockets.push(path);
+            }
+        }
+    }
+    sockets
+}
+
 #[cfg(test)]
 mod env_tests {
     use super::*;
@@ -275,19 +290,4 @@ mod env_tests {
             );
         }
     }
-}
-
-/// List all running agent socket paths in the socket directory.
-pub fn list_agent_sockets() -> Vec<PathBuf> {
-    let dir = resolve_socket_dir();
-    let mut sockets = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("sock") {
-                sockets.push(path);
-            }
-        }
-    }
-    sockets
 }

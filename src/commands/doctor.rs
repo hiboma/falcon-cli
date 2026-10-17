@@ -106,7 +106,11 @@ fn profile_config_search_paths() -> Vec<PathBuf> {
 fn print_file_group(label: &str, paths: &[PathBuf]) {
     match paths.iter().find(|p| p.is_file()) {
         Some(found) => {
-            println!("  {}: {}", label, found.display());
+            println!(
+                "  {}: {}",
+                label,
+                crate::sanitize::escape_control_chars(&found.display().to_string())
+            );
             println!("  {}  status: present", " ".repeat(label.len()));
         }
         None => {
@@ -116,7 +120,11 @@ fn print_file_group(label: &str, paths: &[PathBuf]) {
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("  {}  searched: {}", " ".repeat(label.len()), searched);
+            println!(
+                "  {}  searched: {}",
+                " ".repeat(label.len()),
+                crate::sanitize::escape_control_chars(&searched)
+            );
         }
     }
 }
@@ -355,7 +363,11 @@ fn print_secret_field(name: &str, present: bool, source: Source) {
 /// width of 16 leaves at least two spaces before every value.
 fn print_field(name: &str, value: &str) {
     let label = format!("{}:", name);
-    println!("  {:<16}{}", label, value);
+    println!(
+        "  {:<16}{}",
+        label,
+        crate::sanitize::escape_control_chars(value)
+    );
 }
 
 // ── credentials.toml probing ─────────────────────────────────────────────────
@@ -425,9 +437,16 @@ fn report_active_profile(cli_profile: Option<&str>) {
             } else {
                 "config default-profile"
             };
-            println!("  name:     {}  ({})", ap.name, source);
+            println!(
+                "  name:     {}  ({})",
+                crate::sanitize::escape_control_chars(&ap.name),
+                source
+            );
             if !ap.description.is_empty() {
-                println!("  desc:     {}", ap.description);
+                println!(
+                    "  desc:     {}",
+                    crate::sanitize::escape_control_chars(&ap.description)
+                );
             }
             if ap.commands.iter().any(|c| c == "*") {
                 println!("  commands: all");
@@ -470,7 +489,11 @@ fn report_environment() {
         match std::env::var(name) {
             Ok(_) if *is_sensitive => println!("  {:<22} (set)", name),
             Ok(v) if v.is_empty() => println!("  {:<22} (set, empty)", name),
-            Ok(v) => println!("  {:<22} {}", name, v),
+            Ok(v) => println!(
+                "  {:<22} {}",
+                name,
+                crate::sanitize::escape_control_chars(&v)
+            ),
             Err(_) => println!("  {:<22} (unset)", name),
         }
     }
@@ -496,8 +519,19 @@ async fn report_connectivity(creds: &FalconCredentials) {
         }
     };
 
-    let auth = crate::auth::Auth::new(config.clone());
     let url = format!("{}/oauth2/token", config.base_url);
+
+    let auth = match crate::auth::Auth::new(config.clone()) {
+        Ok(auth) => auth,
+        Err(e) => {
+            println!(
+                "  POST {}  →  SKIPPED",
+                crate::sanitize::escape_control_chars(&url)
+            );
+            println!("  {}", e);
+            return;
+        }
+    };
 
     let start = Instant::now();
     let result = auth.get_token().await;
@@ -506,12 +540,20 @@ async fn report_connectivity(creds: &FalconCredentials) {
     match result {
         Ok(_) => {
             // Success means a token was issued; we do not print it.
-            println!("  POST {}  →  200 OK, token issued ({}ms)", url, elapsed);
+            println!(
+                "  POST {}  →  200 OK, token issued ({}ms)",
+                crate::sanitize::escape_control_chars(&url),
+                elapsed
+            );
         }
         Err(e) => {
             // Auth errors already carry the upstream HTTP status + truncated
             // body (see auth.rs). They do not contain the secret.
-            println!("  POST {}  →  FAILED ({}ms)", url, elapsed);
+            println!(
+                "  POST {}  →  FAILED ({}ms)",
+                crate::sanitize::escape_control_chars(&url),
+                elapsed
+            );
             println!("  {}", e);
         }
     }

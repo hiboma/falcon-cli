@@ -1,6 +1,9 @@
-use crate::auth::Auth;
+use crate::auth::{read_response_prefix, validate_base_url, Auth};
 use crate::error::{FalconError, Result};
+use crate::sanitize::{escape_control_chars, truncate_chars};
 use reqwest::StatusCode;
+
+const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct FalconClient {
@@ -11,14 +14,11 @@ pub struct FalconClient {
 
 impl FalconClient {
     pub fn new(auth: Auth, base_url: String) -> Result<Self> {
-        if !base_url.starts_with("https://") && !Self::is_loopback_http(&base_url) {
-            return Err(FalconError::Config(format!(
-                "base_url must use HTTPS (got: {}). HTTP is only allowed for localhost and 127.0.0.1.",
-                base_url
-            )));
-        }
-
-        let http = reqwest::Client::new();
+        let url = validate_base_url(&base_url)?;
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(url.scheme() == "https")
+            .build()?;
         Ok(Self {
             auth,
             http,
@@ -138,15 +138,16 @@ impl FalconClient {
 
     async fn handle_response(resp: reqwest::Response) -> Result<serde_json::Value> {
         let status = resp.status();
-        let body = resp.text().await?;
-
         if !status.is_success() {
+            let body = read_response_prefix(resp, MAX_ERROR_BODY_BYTES).await?;
             return Err(FalconError::Api(format!(
                 "{}: {}",
                 status,
-                Self::truncate_chars(&body, 200)
+                escape_control_chars(&truncate_chars(&body, 200))
             )));
         }
+
+        let body = resp.text().await?;
 
         // 204 No Content and other empty success bodies are not JSON.
         if body.is_empty() {
@@ -161,33 +162,16 @@ impl FalconClient {
         let status = resp.status();
 
         if !status.is_success() {
-            let body = resp.text().await?;
+            let body = read_response_prefix(resp, MAX_ERROR_BODY_BYTES).await?;
             return Err(FalconError::Api(format!(
                 "{}: {}",
                 status,
-                Self::truncate_chars(&body, 200)
+                escape_control_chars(&truncate_chars(&body, 200))
             )));
         }
 
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
-    }
-
-    /// Truncate on a char boundary; `String::truncate` panics on
-    /// multibyte boundaries, which API error bodies can contain.
-    pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
-        s.chars().take(max).collect()
-    }
-
-    fn is_loopback_http(url: &str) -> bool {
-        for prefix in &["http://localhost", "http://127.0.0.1"] {
-            if let Some(rest) = url.strip_prefix(prefix) {
-                if rest.is_empty() || rest.starts_with(':') || rest.starts_with('/') {
-                    return true;
-                }
-            }
-        }
-        false
     }
 }
 
@@ -197,39 +181,40 @@ mod tests {
 
     #[test]
     fn test_is_loopback_http_localhost() {
-        assert!(FalconClient::is_loopback_http("http://localhost"));
-        assert!(FalconClient::is_loopback_http("http://localhost:8080"));
-        assert!(FalconClient::is_loopback_http("http://localhost/path"));
+        assert!(validate_base_url("http://localhost").is_ok());
+        assert!(validate_base_url("http://localhost:8080").is_ok());
+        assert!(validate_base_url("http://localhost/path").is_ok());
     }
 
     #[test]
     fn test_is_loopback_http_127_0_0_1() {
-        assert!(FalconClient::is_loopback_http("http://127.0.0.1"));
-        assert!(FalconClient::is_loopback_http("http://127.0.0.1:9999"));
-        assert!(FalconClient::is_loopback_http("http://127.0.0.1/path"));
+        assert!(validate_base_url("http://127.0.0.1").is_ok());
+        assert!(validate_base_url("http://127.0.0.1:9999").is_ok());
+        assert!(validate_base_url("http://127.0.0.1/path").is_ok());
+        assert!(validate_base_url("http://[::1]:9999/path").is_ok());
     }
 
     #[test]
     fn test_is_loopback_http_rejects_subdomain_bypass() {
-        assert!(!FalconClient::is_loopback_http("http://localhost.evil.com"));
-        assert!(!FalconClient::is_loopback_http("http://127.0.0.1.evil.com"));
+        assert!(validate_base_url("http://localhost.evil.com").is_err());
+        assert!(validate_base_url("http://127.0.0.1.evil.com").is_err());
     }
 
     #[test]
     fn test_truncate_chars_multibyte_boundary() {
         // 100 3-byte chars: byte 200 is not a char boundary.
         let s = "あ".repeat(100);
-        let t = FalconClient::truncate_chars(&s, 200);
+        let t = truncate_chars(&s, 200);
         assert_eq!(t.chars().count(), 100);
-        assert!(FalconClient::truncate_chars(&s, 50).chars().count() == 50);
+        assert!(truncate_chars(&s, 50).chars().count() == 50);
     }
 
     #[test]
     fn test_is_loopback_http_rejects_non_loopback() {
-        assert!(!FalconClient::is_loopback_http("http://example.com"));
-        assert!(!FalconClient::is_loopback_http("https://localhost"));
-        assert!(!FalconClient::is_loopback_http("ftp://localhost"));
-        assert!(!FalconClient::is_loopback_http(""));
+        assert!(validate_base_url("http://example.com").is_err());
+        assert!(validate_base_url("https://localhost").is_ok());
+        assert!(validate_base_url("ftp://localhost").is_err());
+        assert!(validate_base_url("").is_err());
     }
 
     #[tokio::test]
@@ -286,6 +271,7 @@ pub(crate) mod test_support {
             .and(path("/oauth2/token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "test-token",
+                "token_type": "bearer",
                 "expires_in": 1799,
             })))
             .mount(server)
@@ -297,6 +283,7 @@ pub(crate) mod test_support {
             base_url: server.uri(),
             member_cid: None,
         };
-        FalconClient::new(Auth::new(config), server.uri()).expect("loopback http client")
+        let auth = Auth::new(config).expect("loopback http auth");
+        FalconClient::new(auth, server.uri()).expect("loopback http client")
     }
 }

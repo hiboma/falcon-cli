@@ -60,22 +60,33 @@ impl SecurityConfig {
 pub struct CommandWhitelist {
     allow_all: bool,
     allowed: HashSet<String>,
+    profile_allow_all: bool,
+    profile_commands: Option<HashSet<String>>,
 }
 
 impl CommandWhitelist {
-    pub fn new(allowed_commands: &[String]) -> Self {
+    pub fn new(allowed_commands: &[String], profile_commands: Option<&[String]>) -> Self {
         let allow_all = allowed_commands.iter().any(|c| c == "*");
         let allowed: HashSet<String> = allowed_commands.iter().cloned().collect();
-        Self { allow_all, allowed }
+        let profile_allow_all =
+            profile_commands.is_some_and(|commands| commands.iter().any(|command| command == "*"));
+        let profile_commands = profile_commands.map(|commands| commands.iter().cloned().collect());
+        Self {
+            allow_all,
+            allowed,
+            profile_allow_all,
+            profile_commands,
+        }
     }
 
     /// Check if a command:action pair is allowed.
     pub fn is_allowed(&self, command: &str, action: &str) -> bool {
-        if self.allow_all {
-            return true;
-        }
+        let profile_allowed = self
+            .profile_commands
+            .as_ref()
+            .is_none_or(|commands| self.profile_allow_all || commands.contains(command));
         let key = format!("{}:{}", command, action);
-        self.allowed.contains(&key)
+        profile_allowed && (self.allow_all || self.allowed.contains(&key))
     }
 }
 
@@ -147,7 +158,10 @@ impl AuditLog {
         let now = chrono::Utc::now().to_rfc3339();
         eprintln!(
             "[audit] {} request={} command={} action={}",
-            now, request_id, command, action,
+            now,
+            crate::sanitize::escape_control_chars(request_id),
+            crate::sanitize::escape_control_chars(command),
+            crate::sanitize::escape_control_chars(action),
         );
     }
 
@@ -156,7 +170,10 @@ impl AuditLog {
         let now = chrono::Utc::now().to_rfc3339();
         eprintln!(
             "[audit] {} request={} status={} duration_ms={}",
-            now, request_id, status, duration_ms,
+            now,
+            crate::sanitize::escape_control_chars(request_id),
+            crate::sanitize::escape_control_chars(status),
+            duration_ms,
         );
     }
 
@@ -165,7 +182,9 @@ impl AuditLog {
         let now = chrono::Utc::now().to_rfc3339();
         eprintln!(
             "[audit] {} request={} denied reason={}",
-            now, request_id, reason,
+            now,
+            crate::sanitize::escape_control_chars(request_id),
+            crate::sanitize::escape_control_chars(reason),
         );
     }
 }
@@ -186,18 +205,35 @@ mod tests {
 
     #[test]
     fn test_whitelist_allow_all() {
-        let wl = CommandWhitelist::new(&["*".to_string()]);
+        let wl = CommandWhitelist::new(&["*".to_string()], None);
         assert!(wl.is_allowed("alert", "list"));
         assert!(wl.is_allowed("host", "get"));
     }
 
     #[test]
     fn test_whitelist_specific() {
-        let wl = CommandWhitelist::new(&["alert:list".to_string(), "host:get".to_string()]);
+        let wl = CommandWhitelist::new(&["alert:list".to_string(), "host:get".to_string()], None);
         assert!(wl.is_allowed("alert", "list"));
         assert!(wl.is_allowed("host", "get"));
         assert!(!wl.is_allowed("alert", "get"));
         assert!(!wl.is_allowed("incident", "list"));
+    }
+
+    #[test]
+    fn test_whitelist_intersects_startup_profile() {
+        let profile = ["alert".to_string()];
+        let wl = CommandWhitelist::new(&["*".to_string()], Some(&profile));
+        assert!(wl.is_allowed("alert", "list"));
+        assert!(!wl.is_allowed("host", "get"));
+    }
+
+    #[test]
+    fn test_whitelist_requires_agent_and_profile_permission() {
+        let profile = ["alert".to_string(), "host".to_string()];
+        let wl = CommandWhitelist::new(&["alert:list".to_string()], Some(&profile));
+        assert!(wl.is_allowed("alert", "list"));
+        assert!(!wl.is_allowed("alert", "get"));
+        assert!(!wl.is_allowed("host", "get"));
     }
 
     #[test]
@@ -206,6 +242,7 @@ mod tests {
         for _ in 0..10 {
             assert!(limiter.try_acquire());
         }
+        assert_eq!(limiter.total_requests(), 10);
     }
 
     #[test]

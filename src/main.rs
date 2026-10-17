@@ -8,6 +8,7 @@ mod dispatch;
 mod error;
 mod output;
 mod profile;
+mod sanitize;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{CommandFactory, Parser};
@@ -89,6 +90,7 @@ fn main() {
             config.as_deref(),
             *foreground,
             credentials,
+            cli.profile.as_deref(),
         );
         return;
     }
@@ -111,6 +113,11 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         return;
     }
 
+    // Apply profile authorization before selecting direct or agent transport.
+    // The transport must not be able to bypass the command policy.
+    let active_profile = resolve_profile_or_exit(cli.profile.as_deref());
+    enforce_profile_or_exit(active_profile.as_ref(), &cli.command);
+
     // If FALCON_AGENT_TOKEN is set, route through the agent automatically.
     if !cli.no_agent && cli.token.is_some() {
         handle_agent_client(&cli).await;
@@ -127,21 +134,6 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         }
     }
 
-    // Check profile restrictions before dispatching.
-    if let Some(ref active_profile) = profile::resolve(cli.profile.as_deref()) {
-        let cmd_name = command_name_from(&cli.command);
-        if !active_profile.is_command_allowed(&cmd_name) {
-            eprintln!(
-                "Error: command '{}' is not allowed by profile '{}'",
-                cmd_name, active_profile.name
-            );
-            eprintln!(
-                "hint: use --profile to switch profiles, or run 'falcon-cli profile list' to see available profiles"
-            );
-            std::process::exit(1);
-        }
-    }
-
     // Direct mode: call API directly using resolved credentials.
     let config = match credentials.to_config() {
         Ok(c) => c,
@@ -152,7 +144,10 @@ async fn async_main(cli: Cli, credentials: FalconCredentials) {
         }
     };
 
-    let auth = auth::Auth::new(config.clone());
+    let auth = auth::Auth::new(config.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
     let falcon = client::FalconClient::new(auth, config.base_url.clone()).unwrap_or_else(|e| {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -501,6 +496,7 @@ fn handle_agent_start(
     config: Option<&str>,
     foreground: bool,
     credentials: FalconCredentials,
+    cli_profile: Option<&str>,
 ) {
     if let Err(e) = credentials.validate() {
         eprintln!("Error: {}", e);
@@ -515,7 +511,12 @@ fn handle_agent_start(
         }
     };
 
-    let auth = auth::Auth::new(config_obj.clone());
+    let active_profile = resolve_profile_or_exit(cli_profile);
+
+    let auth = auth::Auth::new(config_obj.clone()).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
     let falcon = client::FalconClient::new(auth, config_obj.base_url.clone()).unwrap_or_else(|e| {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -541,8 +542,34 @@ fn handle_agent_start(
         config_path.as_deref(),
         foreground,
         credentials,
+        active_profile.map(|profile| profile.commands),
     ) {
         eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn resolve_profile_or_exit(cli_profile: Option<&str>) -> Option<profile::ActiveProfile> {
+    profile::resolve_checked(cli_profile).unwrap_or_else(|error| {
+        eprintln!("Error: {}", error);
+        std::process::exit(1);
+    })
+}
+
+fn enforce_profile_or_exit(active_profile: Option<&profile::ActiveProfile>, command: &Command) {
+    let Some(active_profile) = active_profile else {
+        return;
+    };
+    let cmd_name = command_name_from(command);
+    if !active_profile.is_command_allowed(&cmd_name) {
+        eprintln!(
+            "Error: command '{}' is not allowed by profile '{}'",
+            sanitize::escape_control_chars(&cmd_name),
+            sanitize::escape_control_chars(&active_profile.name)
+        );
+        eprintln!(
+            "hint: use --profile to switch profiles, or run 'falcon-cli profile list' to see available profiles"
+        );
         std::process::exit(1);
     }
 }

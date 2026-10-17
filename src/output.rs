@@ -1,4 +1,5 @@
 use crate::cli::OutputFormat;
+use crate::sanitize::escape_control_chars;
 
 pub fn print_value(value: &serde_json::Value, format: &OutputFormat, pretty: bool) {
     match format {
@@ -30,7 +31,7 @@ fn print_table(value: &serde_json::Value, pretty: bool) {
             serde_json::Value::String(_) => {
                 for item in resources {
                     if let Some(s) = item.as_str() {
-                        println!("{}", s);
+                        println!("{}", escape_control_chars(s));
                     }
                 }
             }
@@ -85,7 +86,10 @@ fn collect_keys(resources: &[serde_json::Value]) -> Vec<String> {
 }
 
 fn compute_widths(keys: &[String], resources: &[serde_json::Value]) -> Vec<usize> {
-    let mut widths: Vec<usize> = keys.iter().map(|k| k.len()).collect();
+    let mut widths: Vec<usize> = keys
+        .iter()
+        .map(|key| escape_control_chars(key).len())
+        .collect();
 
     for item in resources {
         for (i, key) in keys.iter().enumerate() {
@@ -110,7 +114,7 @@ fn print_header(keys: &[String], widths: &[usize]) {
     let header: Vec<String> = keys
         .iter()
         .zip(widths.iter())
-        .map(|(k, w)| format!("{:<width$}", k, width = w))
+        .map(|(k, w)| format!("{:<width$}", escape_control_chars(k), width = w))
         .collect();
     println!("{}", header.join("  "));
 }
@@ -140,10 +144,33 @@ fn format_cell(value: Option<&serde_json::Value>) -> String {
     match value {
         None => String::new(),
         Some(serde_json::Value::Null) => String::new(),
-        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::String(s)) => escape_control_chars(s),
         Some(serde_json::Value::Number(n)) => n.to_string(),
         Some(serde_json::Value::Bool(b)) => b.to_string(),
         Some(serde_json::Value::Array(a)) => format!("[{} items]", a.len()),
         Some(serde_json::Value::Object(_)) => "{...}".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_cells_escape_terminal_controls() {
+        assert_eq!(
+            format_cell(Some(&serde_json::json!("line1\n\u{1b}]52;c;payload\u{7}"))),
+            "line1\\n\\u{1b}]52;c;payload\\u{7}"
+        );
+    }
+
+    #[test]
+    fn json_serialization_retains_structured_escaping() {
+        let value = serde_json::json!({"value": "line1\n\u{1b}[31m"});
+        let rendered = serde_json::to_string(&value).unwrap();
+        assert!(rendered.contains("\\n"));
+        assert!(rendered.contains("\\u001b"));
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\u{1b}'));
     }
 }

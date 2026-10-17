@@ -31,12 +31,20 @@ pub async fn send_command(
                     kind: "unknown".to_string(),
                     message: "unknown error".to_string(),
                 });
-            Err(FalconError::Api(format!(
-                "[{}] {}",
-                detail.kind, detail.message
+            Err(FalconError::Api(format_agent_error(
+                &detail.kind,
+                &detail.message,
             )))
         }
     }
+}
+
+fn format_agent_error(kind: &str, message: &str) -> String {
+    format!(
+        "[{}] {}",
+        crate::sanitize::escape_control_chars(kind),
+        crate::sanitize::escape_control_chars(message)
+    )
 }
 
 /// Check the agent status via session.json.
@@ -231,4 +239,17 @@ async fn send_request(stream: UnixStream, request: &AgentRequest) -> Result<Agen
 
 pub async fn check_running(socket_path: &Path) -> bool {
     connect(socket_path).await.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_error_cannot_inject_terminal_or_log_controls() {
+        let error = format_agent_error("api\nforged", "bad\u{1b}]52;c;payload\u{7}");
+
+        assert_eq!(error, "[api\\nforged] bad\\u{1b}]52;c;payload\\u{7}");
+        assert!(!error.chars().any(char::is_control));
+    }
 }
