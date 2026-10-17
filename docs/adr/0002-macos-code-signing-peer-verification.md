@@ -96,8 +96,8 @@ agent 自身の signing identifier と一致するか確認
 | 検証ステップ | macOS | Linux |
 |-------------|-------|-------|
 | ピア PID 取得 | `LOCAL_PEERPID` (`getsockopt`) | `SO_PEERCRED` (`UCred.pid`) |
-| 実行パス取得 | `proc_pidpath` | `/proc/<PID>/exe` の readlink |
-| バイナリ検証 | `SecStaticCodeCheckValidity` (コード署名) | 実行パスの一致確認（署名検証なし） |
+| 実行パス取得 | ログ表示にのみ `proc_pidpath` を使用 | `/proc/<PID>/exe` の readlink |
+| バイナリ検証 | PID から取得した `SecCode` の `SecCodeCheckValidity` | 実行パスの一致確認（署名検証なし） |
 
 Linux ではコード署名の仕組みがないため、実行パスの一致確認（agent 自身のパスと接続元のパスの比較）をフォールバックとします。
 
@@ -105,7 +105,12 @@ Linux ではコード署名の仕組みがないため、実行パスの一致�
 
 開発時は ad-hoc 署名（`codesign -s -`）でも動作します。配布時は Developer ID で署名することで、Team ID ベースの検証が可能になります。
 
-署名なしバイナリ同士の接続（開発中のデバッグ）も許可するため、agent と client の両方が未署名の場合はこのレイヤーをスキップします。
+agent 起動時に designated requirement を取得し、接続元 PID の実行中
+コードオブジェクトを同じ requirement で検証します。pathname を後から
+検証対象にしないため、ファイルの差し替えによる検証迂回を防ぎます。
+identifier だけではなく、Developer ID の anchor と Team ID、または ad-hoc
+署名の cdhash を含む条件を維持します。designated requirement を取得できない
+未署名ビルドでは agent を起動しません。
 
 ### リリース時のコード署名
 
@@ -115,9 +120,9 @@ Linux ではコード署名の仕組みがないため、実行パスの一致�
 
 | agent | client | 検証結果 | 補足 |
 |--------|--------|---------|------|
-| 未署名 | 未署名 | 許可（スキップ） | 開発時、ソースビルド |
-| 同一バイナリ | 同一バイナリ | 許可（パス一致） | 通常の利用形態 |
-| 署名済み | 同一 identifier で署名済み | 許可 | 正式リリース |
+| 未署名 | 任意 | agent 起動を拒否 | ad-hoc 署名が必要 |
+| 同一バイナリ | 同一バイナリ | 許可 | 通常の利用形態 |
+| 署名済み | 同じ designated requirement | 許可 | anchor、Team ID、cdhash を含む |
 | 署名済み | 未署名 | 拒否 | 改ざん検知 |
 | 未署名 | 署名済み | 拒否 | 不整合 |
 | 署名済み | 異なる identifier で署名済み | 拒否 | 別バイナリ |
@@ -126,15 +131,21 @@ Linux ではコード署名の仕組みがないため、実行パスの一致�
 
 **Homebrew tap / ソースビルド**
 
-署名は不要です。`cargo install` やソースからのビルドでは署名が付かないため、agent と client は同一の未署名バイナリとなり、パス一致でコード署名検証はスキップされます。
+agent を使用する場合は ad-hoc 署名または Developer ID 署名が必要です。
+直接実行だけを使用する場合は署名を必要としません。
 
 **GitHub Releases でのバイナリ配布（署名なし）**
 
-署名なしでも動作します。agent と client は同一バイナリなのでパス一致で許可されます。ただし、macOS の Gatekeeper が「開発元を確認できません」の警告を表示します。ユーザーは `xattr -d com.apple.quarantine falcon-cli` または「システム設定 > セキュリティ」での許可が必要です。
+直接実行は動作しますが、agent は起動しません。agent を配布機能に含める
+場合は、少なくとも ad-hoc 署名を付けます。
 
 **GitHub Releases でのバイナリ配布（ad-hoc 署名）**
 
-`codesign -s -` で ad-hoc 署名を付けることができます。CI（GitHub Actions の macOS runner）で署名可能であり、追加のデータは不要です。同じ ad-hoc 署名のバイナリ同士は signing identifier が一致するため、検証が機能します。ただし Gatekeeper の警告は解消されません。
+`codesign -s -` で ad-hoc 署名を付けることができます。CI（GitHub Actions
+の macOS runner）で署名可能であり、追加のデータは不要です。接続元は
+agent 起動時に取得した cdhash を含む designated requirement で検証します。
+同じ identifier を付けただけの別バイナリは拒否します。ただし Gatekeeper
+の警告は解消されません。
 
 ```bash
 # GitHub Actions での ad-hoc 署名

@@ -59,14 +59,13 @@ libproc = "0.14"
 ### タスク
 
 1. macOS 用の `verify_code_signature` 関数を実装します
-   - `SecStaticCodeCreateWithPath` でピアの実行パスから Code オブジェクトを作成します
-   - `SecStaticCodeCheckValidity` で署名の有効性を検証します
-   - agent 自身の Code オブジェクトも同様に取得します
-   - 両方の signing identifier を `SecCodeCopySigningInformation` で取得し、一致を確認します
+   - 接続元 PID から実行中の `SecCode` オブジェクトを取得します
+   - agent 起動時に取得した designated requirement で `SecCodeCheckValidity` を実行します
+   - pathname は検証に使用せず、ログ表示にだけ使用します
 
 2. 署名なしバイナリの処理を実装します
-   - agent と client の両方が未署名の場合は検証をスキップし、`true` を返します
-   - 片方のみ署名されている場合は `false` を返します
+   - designated requirement を取得できない場合は agent の起動を拒否します
+   - 開発時は ad-hoc 署名を使用します
 
 3. Linux 用のフォールバックを実装します
    - agent 自身の実行パスとピアの実行パスを比較します
