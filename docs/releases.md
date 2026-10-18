@@ -46,8 +46,9 @@ must be `true`. For forks, enable **Settings > General > Releases > Release
 immutability** before publishing. The setting affects future published releases,
 not existing ones.
 All assets must be attached while the release is still a draft. After publishing,
-its assets and tag cannot be replaced or deleted; corrections require a new
-version. Do not move a published tag or try to overwrite a published asset.
+its assets and tag cannot be replaced or deleted while the release exists.
+Corrections require a new version. Do not move a published tag or try to
+overwrite a published asset.
 
 If upload or publication fails, inspect the draft and the workflow logs. The
 workflow intentionally refuses to create a second release for an existing tag.
