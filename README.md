@@ -31,6 +31,11 @@ brew install hiboma/tap/falcon-cli
 
 Download the latest binary from [Releases](https://github.com/hiboma/falcon-cli/releases).
 
+For releases built with artifact attestations, verify the downloaded archive
+before extracting or running it. See [release verification](docs/releases.md)
+for the expected source commit and signer workflow checks. Older releases do
+not have these attestations.
+
 ### Cargo with git
 
 ```
