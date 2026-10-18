@@ -72,6 +72,7 @@ cargo deny check
 
 - Minimize GitHub Actions permissions
 - Pin all third-party actions by commit hash
+- All workflows must be registered in `.github/workflows/actions.lock`; see [workflow dependency maintenance](docs/github-actions.md).
 - Validate all user input strictly
 - Use `pull_request` (not `pull_request_target`)
 - Supply chain checks via `cargo-deny` (advisories, licenses, bans, sources) are enforced in CI. Policy lives in `deny.toml`.
