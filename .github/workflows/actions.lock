@@ -4,19 +4,19 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/ci.yml':
-        - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8'
         - 'embarkstudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25'
     '.github/workflows/release-build.yml':
         - 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6'
-        - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
-        - 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        - 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         - 'dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8'
     '.github/workflows/release.yml':
-        - 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
+        - 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333'
     '.github/workflows/scorecard.yml':
-        - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
-        - 'github/codeql-action@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81'
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        - 'github/codeql-action@24c54180a607b1449ed407dd24f251e4e9147c8d'
         - 'ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc'
 dependencies:
     'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6':
@@ -24,19 +24,19 @@ dependencies:
         commit: 'sha1-1e69f48acb82d1966a394da916b4c1698aa569d6'
         owner_id: 44036562
         repo_id: 760701061
-    'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10':
-        ref: 'v6.0.3'
-        commit: 'sha1-df4cb1c069e1874edd31b4311f1884172cec0e10'
+    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':
+        ref: 'v7.0.1'
+        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c':
-        ref: 'v8.0.1'
-        commit: 'sha1-3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
+    'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333':
+        ref: 'v8.0.2'
+        commit: 'sha1-9000827ccba6bdab643e8b6fd33ac0654aef8333'
         owner_id: 44036562
         repo_id: 192626254
-    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a':
-        ref: 'v7.0.1'
-        commit: 'sha1-043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+    'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9':
+        ref: 'v7.0.2'
+        commit: 'sha1-cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         owner_id: 44036562
         repo_id: 192625955
     'dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8':
@@ -49,9 +49,9 @@ dependencies:
         commit: 'sha1-3c6349835b2b7b196a839186cb8b78e02f7b5f25'
         owner_id: 44887257
         repo_id: 228054692
-    'github/codeql-action@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81':
-        ref: 'v4.37.3'
-        commit: 'sha1-e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81'
+    'github/codeql-action@24c54180a607b1449ed407dd24f251e4e9147c8d':
+        ref: 'v4.38.3'
+        commit: 'sha1-24c54180a607b1449ed407dd24f251e4e9147c8d'
         owner_id: 9919
         repo_id: 259445878
     'ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc':
