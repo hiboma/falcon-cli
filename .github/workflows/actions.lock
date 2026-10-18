@@ -7,17 +7,23 @@ workflows:
         - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
         - 'dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8'
         - 'embarkstudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25'
-    '.github/workflows/release.yml':
+    '.github/workflows/release-build.yml':
+        - 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6'
         - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
-        - 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
         - 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
         - 'dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8'
-        - 'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228'
+    '.github/workflows/release.yml':
+        - 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
     '.github/workflows/scorecard.yml':
         - 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'
         - 'github/codeql-action@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81'
         - 'ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc'
 dependencies:
+    'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6':
+        ref: 'v4.2.2'
+        commit: 'sha1-1e69f48acb82d1966a394da916b4c1698aa569d6'
+        owner_id: 44036562
+        repo_id: 760701061
     'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10':
         ref: 'v6.0.3'
         commit: 'sha1-df4cb1c069e1874edd31b4311f1884172cec0e10'
@@ -53,8 +59,3 @@ dependencies:
         commit: 'sha1-2d1146689b8cda280b9bc96326124645441f03bc'
         owner_id: 67707773
         repo_id: 421101922
-    'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228':
-        ref: 'v3.0.2'
-        commit: 'sha1-3d0d9888cb7fd7b750713d6e236d1fcb99157228'
-        owner_id: 2242
-        repo_id: 204253808
