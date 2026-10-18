@@ -10,6 +10,22 @@ permissions:
   contents: read
 
 jobs:
+  actions-lock:
+    name: Verify Actions lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Install actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install github/gh-actions-lock --pin v0.2.0
+      - name: Verify workflow dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh actions-lock --verify
+
   check:
     name: Check
     runs-on: ubuntu-latest
